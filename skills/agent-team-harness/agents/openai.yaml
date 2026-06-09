@@ -1,0 +1,4 @@
+interface:
+  display_name: "Agent Team Harness"
+  short_description: "Initializes reusable AI development team workflows"
+  default_prompt: "Use $agent-team-harness to initialize or update a project-local .agent development team workflow."

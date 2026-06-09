@@ -1,0 +1,33 @@
+# Agent local configuration
+.agent/
+
+# DeepSeek local model config
+.deepseek/
+
+# Obsidian IDE workspace config
+.obsidian/
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
