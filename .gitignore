@@ -7,6 +7,9 @@
 # Obsidian IDE workspace config
 .obsidian/
 
+# Agent skills (local, only uploaded on initial commit)
+skills/
+
 # OS generated files
 .DS_Store
 .DS_Store?
