@@ -1,0 +1,18 @@
+[project]
+name = "agent-eval-sdk"
+version = "0.2.0"
+description = "Agent 调用链路评测系统 - 上报 SDK"
+requires-python = ">=3.11"
+dependencies = [
+    "redis>=5.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+otel = [
+    "opentelemetry-sdk>=1.28.0",
+    "opentelemetry-api>=1.28.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

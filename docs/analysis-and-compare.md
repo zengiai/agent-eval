@@ -12,7 +12,7 @@
 eval_scores（单层单次得分）
     │ 聚合
     ▼
-eval_runs.score（单 run 的加权总分，回填到 traces.overall_score）
+traces.overall_score（单 run 的加权总分，各层加权计算后回填）
     │ 聚合
     ▼
 eval_tasks.summary_metrics（一个 Case Set × 一个版本）
@@ -71,13 +71,14 @@ def aggregate_task(task_id: UUID) -> Dict:
 
 ### 2.1 前置条件
 
-版本对比必须满足以下条件，否则结果不可信：
+版本对比必须满足以下全部条件，否则结果不可信（此为权威定义，其他文档引用此处）：
 
 | 条件 | 校验方式 | 不满足时的行为 |
 |------|---------|-------------|
 | 同一 Case Set | `task_a.case_set_id == task_b.case_set_id` | 拒绝对比，提示选择相同 Case Set 的 Task |
 | 同一评测器版本 | `evaluator_version` 一致 | 拒绝对比，提示先执行「重评」统一版本 |
-| 同一启用层 | `enabled_layers` 一致（`__meta__` 中记录） | 警告：只能对比共同启用的层 |
+| 同一启用层 | `enabled_layers` 一致（`__meta__` 中记录） | 拒绝对比，提示启用层不一致 |
+| 同一权重配置 | 各层维度权重一致（`config.weights` 中记录） | 警告：权重不同会导致总分不可比 |
 
 ### 2.2 对比算法
 

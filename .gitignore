@@ -34,3 +34,9 @@ build/
 .idea/
 *.swp
 *.swo
+
+AGENTS.md
+
+/docs/features/**
+
+.env

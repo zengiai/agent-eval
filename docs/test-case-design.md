@@ -6,21 +6,26 @@
 
 ## 1. 用例 Schema
 
-用例的完整字段定义见 [data-model.md §2.3](data-model.md) `eval_cases` 表，本文档聚焦**标注规范**与**测试集设计**，仅列出核心字段：
+用例的完整字段定义见 [data-model.md §2.3](data-model.md) `eval_cases` 表，本文档聚焦**标注规范**与**测试集设计**，仅列出与标注直接相关的核心字段：
 
-| 字段 | 说明 | 示例 |
-|------|------|------|
-| `query` | 用户问题原文 | "帮我查一下上个月的电费" |
-| `application` | 所属应用 | `bill_query` |
-| `agent_version` | 触发时的 Agent 版本 | `v2.3.0` |
-| `expected_intent` | 期望意图 | `["bill_query", "account_info"]` |
-| `expected_tools` | 期望调用的工具清单 | `["get_bill", "get_account"]` |
-| `expected_checkpoints` | 回答必须包含的检查点 | `[{key:"amount",mode:"must_contain"}]` |
-| `expect_mode` | 意图匹配模式 | `any` / `all` / `at_least_n` / `fuzzy` |
-| `difficulty` | 难度等级 | `easy` / `medium` / `hard` |
-| `category` | 业务分类 | `查费类` / `办理类` / `咨询类` |
-| `tags` | 自定义标签 | `["多轮", "跨应用"]` |
-| `source` | 来源 | `manual` / `trace` / `llm_auto` / `llm_reviewed` / `hybrid` |
+| 字段 | 说明 | DDL 映射 | 示例 |
+|------|------|---------|------|
+| `query` | 用户问题原文 | `eval_cases.query` | "帮我查一下上个月的电费" |
+| `expected_intent` | 期望意图（含 `mode`） | `eval_cases.expected_intent` (JSONB) | `{"intents": ["bill_query"], "mode": "all"}` |
+| `expected_retrieval` | 期望召回的相关文档 ID | `eval_cases.expected_retrieval` (JSONB) | `{"relevant_ids": ["doc_001"]}` |
+| `expected_tools` | 期望工具调用序列（含 `match_mode`） | `eval_cases.expected_tools` (JSONB) | `[{"tool_name": "get_bill", "match_mode": "exact"}]` |
+| `expected_answer` | 期望回答检查点（含 `check_points`、`match` 模式） | `eval_cases.expected_answer` (JSONB) | `{"check_points": [{"key":"金额","match":"must_contain"}]}` |
+| `gold_answer` | 参考标准答案 | `eval_cases.gold_answer` (TEXT) | "您上月电费为..." |
+| `difficulty` | 难度等级 | `eval_cases.difficulty` | `easy` / `medium` / `hard` |
+| `category` | 业务分类 | `eval_cases.category` | `查费类` / `办理类` / `咨询类` |
+| `tags` | 自定义标签 | `eval_cases.tags` | `["多轮", "跨应用"]` |
+| `source` | 来源（定义见 data-model.md） | `eval_cases.source` | `manual` / `trace` / `llm_auto` / `llm_reviewed` / `hybrid` |
+
+> **字段映射说明**：本文档使用扁平化的标注术语（如 `expected_checkpoints`、`expect_mode`、`tool_match_mode`）来描述标注逻辑，这些概念在 DDL 中均嵌套在对应 JSONB 字段内：
+> - `expected_checkpoints` / `checkpoint_mode` → `eval_cases.expected_answer.check_points` / `eval_cases.expected_answer.check_points[].match`
+> - `expect_mode` → `eval_cases.expected_intent.mode`
+> - `tool_match_mode` → `eval_cases.expected_tools[].match_mode`
+> - `application` → `eval_cases.tags` 或 `eval_cases.category`
 
 ---
 
@@ -223,8 +228,10 @@ def update_case_health(case_ids: List[UUID]):
     """每轮评测后更新 Case 健康状态"""
     for cid in case_ids:
         recent = db.query(
-            """SELECT score FROM eval_runs WHERE eval_case_id = :cid
-               ORDER BY created_at DESC LIMIT 10""",
+            """SELECT t.overall_score AS score FROM traces t
+               JOIN eval_runs r ON r.trace_id = t.id
+               WHERE r.eval_case_id = :cid
+               ORDER BY t.created_at DESC LIMIT 10""",
             {"cid": cid}
         )
         avg = mean(r.score for r in recent)
