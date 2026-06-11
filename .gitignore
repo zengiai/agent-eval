@@ -37,6 +37,9 @@ build/
 
 AGENTS.md
 
+# Qoder workspace config
+.qoder/
+
 /docs/features/**
 
 .env
