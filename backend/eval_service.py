@@ -92,7 +92,7 @@ class EvalService:
 
     # ── 挂载 / 卸载 ───────────────────────────────────────────────────
 
-    async def mount(self, api_port: int = 8000) -> None:
+    async def mount(self, api_port: int = 18000) -> None:
         """挂载评测系统到当前 Agent 进程。
 
         启动：

@@ -98,7 +98,10 @@ class EvalCase(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow, onupdate=datetime.utcnow)
 
     set_memberships: Mapped[List["CaseSetMember"]] = relationship(back_populates="eval_case", cascade="all, delete-orphan")
-    runs: Mapped[List["EvalRun"]] = relationship(back_populates="eval_case")
+    runs: Mapped[List["EvalRun"]] = relationship(
+        back_populates="eval_case",
+        primaryjoin="foreign(EvalRun.eval_case_id) == EvalCase.id",
+    )
 
     __table_args__ = (
         Index("idx_eval_cases_source_trace", "source_trace_id"),
@@ -188,8 +191,14 @@ class EvalRun(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
 
     task: Mapped["EvalTask"] = relationship(back_populates="runs")
-    eval_case: Mapped["EvalCase"] = relationship(back_populates="runs")
-    trace: Mapped[Optional["Trace"]] = relationship(back_populates="eval_run")
+    eval_case: Mapped["EvalCase"] = relationship(
+        back_populates="runs",
+        primaryjoin="foreign(EvalRun.eval_case_id) == EvalCase.id",
+    )
+    trace: Mapped[Optional["Trace"]] = relationship(
+        back_populates="eval_run",
+        primaryjoin="foreign(EvalRun.trace_id) == Trace.id",
+    )
 
     __table_args__ = (
         Index("idx_eval_runs_task", "task_id"),
@@ -233,7 +242,11 @@ class Trace(Base):
 
     spans: Mapped[List["Span"]] = relationship(back_populates="trace", cascade="all, delete-orphan")
     eval_scores: Mapped[List["EvalScore"]] = relationship(back_populates="trace", cascade="all, delete-orphan")
-    eval_run: Mapped[Optional["EvalRun"]] = relationship(back_populates="trace", uselist=False)
+    eval_run: Mapped[Optional["EvalRun"]] = relationship(
+        back_populates="trace",
+        uselist=False,
+        primaryjoin="foreign(EvalRun.trace_id) == Trace.id",
+    )
 
     __table_args__ = (
         Index("idx_traces_version", "agent_version", "created_at"),

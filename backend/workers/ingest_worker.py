@@ -76,7 +76,7 @@ class IngestWorker:
         """停止消费者。"""
         self._running = False
         if self._redis:
-            await self._redis.close()
+            await self._redis.aclose()
         logger.info("Ingest 消费者已停止")
 
     async def _consume_batch(self):
@@ -96,10 +96,27 @@ class IngestWorker:
         if not batch:
             return
 
-        # 按事件类型分组
-        trace_starts = [e for e in batch if e["type"] == "trace_start"]
-        spans = [e for e in batch if e["type"] == "span"]
-        trace_finishes = [e for e in batch if e["type"] == "trace_finish"]
+        # 按事件类型分组（同时过滤非法 UUID 事件，防止整批崩溃）
+        trace_starts = []
+        spans = []
+        trace_finishes = []
+        for e in batch:
+            etype = e.get("type", "")
+            # 校验 trace_id 是否为合法 UUID
+            tid = e.get("trace_id", "")
+            try:
+                UUID(tid)
+            except (ValueError, AttributeError):
+                logger.warning("跳过 trace_id 非法的事件: %s", tid)
+                continue
+            if etype == "trace_start":
+                trace_starts.append(e)
+            elif etype == "span":
+                spans.append(e)
+            elif etype == "trace_finish":
+                trace_finishes.append(e)
+            else:
+                logger.warning("跳过未知事件类型: %s", etype)
 
         async with self._session_factory() as session:
             # 处理 trace_start
@@ -115,11 +132,18 @@ class IngestWorker:
                 )
                 session.add(trace)
 
-                # 回写 eval_runs.trace_id
+                # 回写 eval_runs.trace_id（容忍非法 run_id）
                 run_id = event.get("run_id")
                 if run_id:
-                    stmt = update(EvalRun).where(EvalRun.id == UUID(run_id)).values(trace_id=UUID(event["trace_id"]))
-                    await session.execute(stmt)
+                    try:
+                        stmt = (
+                            update(EvalRun)
+                            .where(EvalRun.id == UUID(run_id))
+                            .values(trace_id=UUID(event["trace_id"]))
+                        )
+                        await session.execute(stmt)
+                    except (ValueError, AttributeError):
+                        logger.warning("跳过非法的 run_id: %s", run_id)
 
             # 处理 span 事件
             for event in spans:
