@@ -45,6 +45,15 @@
 
 **注意**：效果层不直接对应单条 span，而是对整条 Trace 的综合评估。它依赖于前四层的评测结果、延迟数据、Token 消耗等全局指标。
 
+**span_type 的来源**（详见 [trace-protocol.md §6](trace-protocol.md)）：
+
+| 数据路径 | span_type 来源 | 说明 |
+|---------|---------------|------|
+| 自研 SDK（`TRACE_MODE="sdk"`） | 代码显式传入 `report_span(span_type="intent")` | 完全控制，100% 精确 |
+| OTel 适配器（`TRACE_MODE="otel"`） | 三层自动推导：`eval.span_type` 属性 → 模式匹配 → 兜底返回 `span.name` | 零侵入，支持 LangChain/LlamaIndex/OpenAI Agent SDK 等框架自动映射 |
+
+评测引擎通过 `_group_spans_by_type()` 按 `span_type` 字段分组分发到对应层评测器，不关心 `span_type` 的具体来源。
+
 ### 1.3 评测执行时序
 
 ```mermaid
@@ -2178,10 +2187,13 @@ architecture.md (架构总览)
 |--------|---------|------|
 | `eval_runs` | `expected_snapshot` | 创建 Run 时从 `eval_cases` 复制 |
 | `spans` | `score` | 评测完成后从 `eval_scores` 回填 |
-| `traces` | `overall_score` | 加权总分回填 |
+| `traces` | `overall_score` | 加权总分回填（每次评测覆盖最新值） |
 | `eval_scores` | `score`, `metrics`, `method` | 各层评测器计算 |
+| `eval_scores` | `eval_run_id` | 关联到具体 Run，支持多轮评分历史独立记录 |
 | `eval_scores` | `evaluator_version` | 评测器自身的版本号 |
 | `eval_scores` | `judge_trace` | LLM Judge 的裁决过程（JSONB） |
+
+> **多轮评分隔离**：`EvalScore` 通过 `eval_run_id`（NOT NULL FK → eval_runs）关联到具体的评测运行记录。同一 Trace 被多次评分时，每轮产生独立的 `EvalScore` 记录，通过 `eval_run_id` 区分。旧分数不再被删除，支持完整的历史追溯。
 
 ### 6.3 版本对比的前置条件
 

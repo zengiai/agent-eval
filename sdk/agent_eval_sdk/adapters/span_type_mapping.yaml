@@ -1,0 +1,42 @@
+# ── OTel Span.name → eval span_type 映射规则 ──────────────────────
+# 匹配方式：span.name.lower() 中包含 pattern 时触发
+# 多规则冲突：取 pattern 字符串最长者（更具体的规则优先）
+# 格式：pattern: span_type
+#
+# span_type 合法枚举：intent | retrieval | tool_call | generation | outcome
+#
+# 添加入口：
+#   - 直接编辑此文件（对 SDK 所有用户生效）
+#   - 通过 EvalSpanExporter(span_type_rules={...}) 传入运行时规则（覆盖此文件）
+#   - 在 Span 属性中设置 eval.span_type 绕过所有规则（第1层优先级）
+# ====================================================================
+
+# === LangChain / LangGraph ===
+chatopenai:         generation
+chat:               generation
+llm:                generation
+openai.chat:        generation
+retriever:          retrieval
+retriev:            retrieval
+similarity_search:  retrieval
+vectorstore:        retrieval
+tool:               tool_call
+agentexecutor:      outcome
+agent:              outcome
+chain.invoke:       generation
+chain:              generation
+
+# === LlamaIndex ===
+llm_predict:        generation
+complete:           generation
+query_engine:       outcome
+query:              retrieval
+retrieve:           retrieval
+node_parser:        retrieval
+
+# === OpenAI Agents SDK ===
+openai_agent:       outcome
+agent_runner:       outcome
+function_call:      tool_call
+tool_call:          tool_call
+model_response:     generation

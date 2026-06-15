@@ -1,15 +1,21 @@
-"""Agent Server —— HTTP API + Dashboard。
+"""Agent Server —— HTTP API + Dashboard + Cases。
 
 端点:
-  POST /api/chat/stream      SSE 流式对话
-  POST /api/flush             Redis → DB 消费
-  GET  /api/dashboard/summary 汇总统计
-  GET  /api/dashboard/traces  Trace 列表
-  GET  /api/dashboard/traces/{id}  详情（span + score）
-  GET  /                        Dashboard HTML
+  POST /api/chat/stream         SSE 流式对话
+  POST /api/flush               Redis → DB 消费
+  GET  /api/dashboard/summary   汇总统计
+  GET  /api/dashboard/traces    Trace 列表
+  GET  /api/dashboard/traces/{id} 详情（span + score）
+  GET  /                         Dashboard HTML
+  GET  /api/cases               用例列表
+  POST /api/cases               创建用例
+  GET  /api/cases/{id}          用例详情
+  POST /api/cases/from-trace/{id} Trace → Case
+  POST /api/cases/{id}/evaluate  单Case评分
 """
 
 import asyncio
+import atexit
 import json as _json
 import os
 import sys
@@ -24,10 +30,11 @@ from sqlalchemy import select, func, desc
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_ROOT)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # examples/ 目录
 
 from agent_eval_sdk import TraceReporter
 from backend.core.database import async_session_factory
-from backend.core.models import Trace, Span, EvalScore
+from backend.core.models import Trace, Span, EvalScore, EvalCase
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Config
@@ -56,9 +63,52 @@ except Exception as e:
 from example_agent import ExampleAgent  # noqa: E402
 
 agent = ExampleAgent(reporter=reporter, **LLM_CONFIG)
+
+# ── OTel Agent 初始化（可选依赖，不可用时优雅降级）──────────────────────
+otel_available = False
+otel_agent = None
+try:
+    from opentelemetry import trace
+    from opentelemetry.sdk.trace import TracerProvider
+    from opentelemetry.sdk.trace.export import SimpleSpanProcessor
+    from agent_eval_sdk.adapters.otel_exporter import EvalSpanExporter
+    from example_agent import OtelExampleAgent  # noqa: E402
+
+    provider = TracerProvider()
+    otel_exporter = EvalSpanExporter(
+        redis_url=REDIS_URL,
+        agent_version="example-otel-v1.0.0",
+        source="production",
+    )
+    # SimpleSpanProcessor：每个 Span 结束时立即触发 export()。
+    # EvalSpanExporter 内部会缓存子 Span，等根 Span 到达后统一输出完整 trace。
+    provider.add_span_processor(SimpleSpanProcessor(otel_exporter))
+    trace.set_tracer_provider(provider)
+
+    otel_agent = OtelExampleAgent(**LLM_CONFIG)
+    otel_available = True
+    print(f"✅ OTel Agent 就绪（SimpleSpanProcessor → EvalSpanExporter）")
+
+    # 进程退出时优雅关闭 OTel 资源（释放 Redis 连接）
+    def _shutdown_otel():
+        try:
+            otel_exporter.shutdown()
+        except Exception:
+            pass
+    atexit.register(_shutdown_otel)
+
+except ImportError as e:
+    print(f"⚠️  OTel Agent 不可用（缺少依赖: {e}），请安装: pip install agent-eval-sdk[otel]")
+except Exception as e:
+    print(f"⚠️  OTel Agent 初始化失败: {e}")
+
 _executor = ThreadPoolExecutor(max_workers=4)
 
 app = FastAPI(title="Agent Eval", version="2.0.0")
+
+# ── 注册 cases 路由（Trace→Case + 单Case评分）──────────────────────
+from backend.api.cases import router as cases_router
+app.include_router(cases_router)
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -67,34 +117,58 @@ app = FastAPI(title="Agent Eval", version="2.0.0")
 
 @app.post("/api/chat/stream")
 async def api_chat_stream(request: Request):
-    """SSE 流式对话 —— 逐 token 推送到前端。"""
+    """SSE 流式对话 —— 逐 token 推送到前端。
+
+    支持 trace_mode 参数选择埋点方式：
+    - "sdk"（默认）：SDK 显式埋点（TraceReporter）
+    - "otel"：OTel 自动埋点（EvalSpanExporter），需安装 agent-eval-sdk[otel]
+    """
     body = await request.json()
     query = (body.get("query") or "").strip()
     if not query:
         return JSONResponse({"error": "query 不能为空"}, 400)
 
+    trace_mode = (body.get("trace_mode") or "sdk").strip().lower()
+
+    # 选择 Agent
+    if trace_mode == "otel" and otel_available:
+        selected_agent = otel_agent
+    else:
+        selected_agent = agent
+
     run_id = str(uuid.uuid4())
 
     async def event_stream() -> AsyncGenerator[str, None]:
         loop = asyncio.get_event_loop()
-        gen = await loop.run_in_executor(
-            _executor, lambda: agent.run_stream_tokens(query, run_id)
-        )
+        queue: asyncio.Queue = asyncio.Queue()
+
+        def producer():
+            """在独立线程中运行同步生成器，将 token 推入 asyncio 队列。"""
+            try:
+                for token in selected_agent.run_stream_tokens(query, run_id):
+                    loop.call_soon_threadsafe(queue.put_nowait, token)
+            except Exception as e:
+                loop.call_soon_threadsafe(queue.put_nowait, f"[error] {e}")
+            # sentinel：通知消费者结束
+            loop.call_soon_threadsafe(queue.put_nowait, None)
+
+        _executor.submit(producer)
+
         # 先发 run_id
         yield f"data: {_json.dumps({'type': 'meta', 'run_id': run_id})}\n\n"
 
-        try:
-            for token in gen:
-                if token.startswith("[status]"):
-                    yield f"data: {_json.dumps({'type': 'status', 'text': token[8:]})}\n\n"
-                elif token.startswith("[tool]"):
-                    yield f"data: {_json.dumps({'type': 'tool', 'text': token[6:]})}\n\n"
-                elif token.startswith("[error]"):
-                    yield f"data: {_json.dumps({'type': 'error', 'text': token[7:]})}\n\n"
-                else:
-                    yield f"data: {_json.dumps({'type': 'token', 'text': token})}\n\n"
-        except Exception as e:
-            yield f"data: {_json.dumps({'type': 'error', 'text': str(e)})}\n\n"
+        while True:
+            token = await queue.get()
+            if token is None:
+                break
+            if token.startswith("[status]"):
+                yield f"data: {_json.dumps({'type': 'status', 'text': token[8:]})}\n\n"
+            elif token.startswith("[tool]"):
+                yield f"data: {_json.dumps({'type': 'tool', 'text': token[6:]})}\n\n"
+            elif token.startswith("[error]"):
+                yield f"data: {_json.dumps({'type': 'error', 'text': token[7:]})}\n\n"
+            else:
+                yield f"data: {_json.dumps({'type': 'token', 'text': token})}\n\n"
 
         yield "data: [DONE]\n\n"
 
@@ -166,6 +240,19 @@ async def dashboard_traces(limit: int = Query(20, ge=1, le=100), offset: int = Q
             select(Trace).order_by(desc(Trace.created_at)).limit(limit).offset(offset)
         )
         traces = rows.scalars().all()
+
+        # 查询哪些 trace 已转为 case
+        trace_ids = [t.id for t in traces]
+        trace_to_case: dict = {}  # trace_id → case_id
+        if trace_ids:
+            cs_result = await s.execute(
+                select(EvalCase.source_trace_id, EvalCase.id).where(
+                    EvalCase.source_trace_id.in_(trace_ids)
+                )
+            )
+            for row in cs_result.all():
+                trace_to_case[str(row[0])] = str(row[1])
+
     return {
         "total": total,
         "traces": [
@@ -178,6 +265,8 @@ async def dashboard_traces(limit: int = Query(20, ge=1, le=100), offset: int = Q
                 "total_latency_ms": t.total_latency_ms,
                 "created_at": t.created_at.isoformat() if t.created_at else None,
                 "span_count": None,
+                "already_case": str(t.id) in trace_to_case,
+                "case_id": trace_to_case.get(str(t.id)),
             }
             for t in traces
         ],
@@ -253,30 +342,31 @@ async def dashboard_trace_detail(trace_id: str):
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# HTML
+# HTML —— 纯 Chat 对话页面（看板已迁移到 18000）
 # ═══════════════════════════════════════════════════════════════════════════
 
-@app.get("/", response_class=HTMLResponse)
-async def index():
-    return DASHBOARD_HTML
-
-
-DASHBOARD_HTML = r"""<!DOCTYPE html>
+CHAT_HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
-<title>Agent Eval · Chat + Dashboard</title>
+<title>Agent Eval · Chat</title>
 <style>
 :root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e1e4eb;--muted:#888ca0;
-  --accent:#6c8aff;--green:#4ade80;--red:#f87171;--yellow:#fbbf24;--purple:#a78bfa;}
+  --accent:#6c8aff;--green:#4ade80;--red:#f87171;--purple:#a78bfa;}
 *{margin:0;padding:0;box-sizing:border-box}
 body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow:hidden}
-.tabs{display:flex;gap:2px;padding:16px 24px 0;background:var(--card);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:10}
-.tab{padding:10px 20px;border:none;background:none;color:var(--muted);cursor:pointer;font-size:15px;border-radius:8px 8px 0 0;transition:.2s}
-.tab.active{background:var(--bg);color:var(--accent)}.tab:hover:not(.active){color:var(--text)}
-.panel{display:none;max-width:1200px;margin:0 auto}.panel.active{display:flex;flex-direction:column;height:calc(100vh - 64px)}
-/* Chat */
-.chat-wrap{flex:1;overflow:hidden;display:flex;flex-direction:column}
+.topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
+.topbar h1{font-size:18px;display:flex;align-items:center;gap:8px}
+.topbar a{color:var(--accent);text-decoration:none;font-size:13px;padding:6px 14px;border:1px solid var(--accent);border-radius:6px;transition:.2s}
+.topbar a:hover{background:var(--accent);color:#fff}
+.btn-flush{padding:6px 14px;background:var(--green);color:#000;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;margin-right:10px}
+.btn-flush:disabled{opacity:.4}
+.mode-switch{display:flex;gap:2px;background:var(--bg);border-radius:8px;padding:3px;margin-right:12px}
+.mode-option{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;color:var(--muted);transition:.2s;user-select:none}
+.mode-option input{display:none}
+.mode-option.active{background:var(--accent);color:#fff;font-weight:600}
+.mode-option.disabled{opacity:.3;cursor:not-allowed}
+.chat-wrap{flex:1;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 60px)}
 .chat-msgs{flex:1;overflow-y:auto;padding:20px 24px}
 .msg{margin-bottom:18px;animation:fadeIn .3s}
 .msg.user{text-align:right}.msg.agent{text-align:left}
@@ -291,110 +381,48 @@ body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;backgrou
 .chat-bar input:focus{border-color:var(--accent)}
 .chat-bar button{padding:14px 28px;background:var(--accent);color:#fff;border:none;border-radius:12px;cursor:pointer;font-size:15px;font-weight:600}
 .chat-bar button:hover{opacity:.85}.chat-bar button:disabled{opacity:.4;cursor:not-allowed}
-/* Dashboard */
-.dash-wrap{padding:24px;overflow-y:auto;height:calc(100vh - 64px)}
-.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:16px;margin-bottom:24px}
-.stat-card{background:var(--card);border-radius:12px;padding:18px;border:1px solid var(--border)}
-.stat-card .label{font-size:12px;color:var(--muted);margin-bottom:6px}
-.stat-card .value{font-size:26px;font-weight:700}
-.value.green{color:var(--green)}.value.red{color:var(--red)}
-.dash-bar{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-.dash-bar h2{font-size:18px}
-.dash-bar button{padding:8px 16px;background:var(--border);color:var(--text);border:none;border-radius:8px;cursor:pointer;font-size:13px;margin-left:8px;transition:.2s}
-.dash-bar button:hover{background:var(--accent)}.dash-bar button.active{background:var(--accent)}
-.btn-flush{padding:8px 16px;background:var(--green)!important;color:#000!important;border:none;border-radius:8px;cursor:pointer;font-size:13px;font-weight:600}
-.btn-flush:disabled{opacity:.4}
-.trace-table{width:100%;border-collapse:collapse;background:var(--card);border-radius:12px;overflow:hidden}
-.trace-table th,.trace-table td{padding:10px 14px;text-align:left;border-bottom:1px solid var(--border);font-size:13px}
-.trace-table th{color:var(--muted);font-weight:600;font-size:12px}
-.trace-table tr{cursor:pointer;transition:.2s}.trace-table tr:hover{background:rgba(108,138,255,.06)}
-.badge{display:inline-block;padding:2px 8px;border-radius:5px;font-size:11px;font-weight:600}
-.badge.success{background:rgba(74,222,128,.15);color:var(--green)}.badge.error{background:rgba(248,113,113,.15);color:var(--red)}
-/* Side Panel */
-.overlay{position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.5);z-index:100;opacity:0;pointer-events:none;transition:opacity .3s}
-.overlay.show{opacity:1;pointer-events:auto}
-.sidepanel{position:fixed;top:0;right:-560px;width:540px;height:100%;background:var(--card);z-index:101;transition:right .35s ease;display:flex;flex-direction:column;box-shadow:-4px 0 24px rgba(0,0,0,.4)}
-.sidepanel.show{right:0}
-.sp-header{display:flex;justify-content:space-between;align-items:center;padding:20px 24px;border-bottom:1px solid var(--border)}
-.sp-header h3{font-size:17px}.sp-header button{background:none;border:none;color:var(--muted);cursor:pointer;font-size:20px;padding:4px 8px}
-.sp-tabs{display:flex;border-bottom:1px solid var(--border);padding:0 24px}
-.sp-tab{padding:10px 18px;border:none;background:none;color:var(--muted);cursor:pointer;font-size:14px;border-bottom:2px solid transparent;transition:.2s}
-.sp-tab.active{color:var(--accent);border-bottom-color:var(--accent)}
-.sp-body{flex:1;overflow-y:auto;padding:20px 24px}
-.sp-body pre{background:var(--bg);border-radius:8px;padding:16px;font-size:13px;line-height:1.6;white-space:pre-wrap;word-break:break-word;max-height:calc(100vh - 300px);overflow:auto}
-.span-card{background:var(--bg);border-radius:8px;padding:14px;border:1px solid var(--border);margin-bottom:10px}
-.span-card .s-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-.span-card .s-type{font-weight:700;color:var(--accent);font-size:14px}
-.span-card .s-meta{font-size:11px;color:var(--muted)}
-.span-card .s-body{display:grid;grid-template-columns:1fr 1fr;gap:8px;font-size:12px}
-.span-card .s-body pre{margin:4px 0;max-height:100px;overflow:auto;padding:8px;font-size:11px}
 @keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.empty{text-align:center;padding:60px;color:var(--muted)}
 .cursor{display:inline-block;width:8px;height:18px;background:var(--accent);animation:blink .8s infinite;vertical-align:text-bottom;margin-left:2px}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
 </style>
 </head>
 <body>
 
-<div class="tabs">
-  <button class="tab active" id="tabChat" onclick="switchTab('chat')">💬 Chat</button>
-  <button class="tab" id="tabDash" onclick="switchTab('dashboard')">📊 Dashboard</button>
-</div>
-
-<!-- ═══════════════ Chat ═══════════════ -->
-<div id="panel-chat" class="panel active">
-  <div class="chat-wrap">
-    <div class="chat-msgs" id="chatMsgs">
-      <div class="msg agent"><div class="bubble">👋 你好！我是支持工具调用 + 流式输出的 ExampleAgent。</div></div>
+<div class="topbar">
+  <h1>💬 Agent Eval · Chat</h1>
+  <div style="display:flex;align-items:center;">
+    <div class="mode-switch">
+      <label class="mode-option active" id="modeSdk" onclick="switchMode('sdk')">
+        <input type="radio" name="traceMode" value="sdk" checked> SDK 埋点
+      </label>
+      <label class="mode-option" id="modeOtel" onclick="switchMode('otel')">
+        <input type="radio" name="traceMode" value="otel"> OTel 埋点
+      </label>
     </div>
-    <div class="chat-bar">
-      <input id="chatInput" placeholder="输入问题（支持加减法计算）..." onkeydown="if(event.key==='Enter')send()">
-      <button id="sendBtn" onclick="send()">发送</button>
-    </div>
-  </div>
-</div>
-
-<!-- ═══════════════ Dashboard ═══════════════ -->
-<div id="panel-dashboard" class="panel">
-  <div class="dash-wrap">
-    <div class="dash-bar"><h2>📊 评测总览</h2>
-      <div>
-        <button id="autoBtn" onclick="toggleAuto()">🔄 自动刷新: 关</button>
-        <button class="btn-flush" onclick="flushEvents()">📥 Flush</button>
-      </div>
-    </div>
-    <div class="stats" id="statsCards"></div>
-    <h3 style="color:var(--muted);margin-bottom:10px">📋 最近 Trace</h3>
-    <div id="tracesTable"></div>
+    <button class="btn-flush" onclick="flushEvents()">📥 Flush</button>
+    <a href="http://localhost:18000/dashboard/" target="_blank">📊 查看看板 →</a>
   </div>
 </div>
 
-<!-- ═══════════════ Side Panel ═══════════════ -->
-<div class="overlay" id="overlay" onclick="closePanel()"></div>
-<div class="sidepanel" id="sidepanel">
-  <div class="sp-header">
-    <h3>🔍 Trace 详情</h3>
-    <button onclick="closePanel()">✕</button>
+<div class="chat-wrap">
+  <div class="chat-msgs" id="chatMsgs">
+    <div class="msg agent"><div class="bubble">👋 你好！我是支持工具调用 + 流式输出的 ExampleAgent。</div></div>
   </div>
-  <div class="sp-tabs">
-    <button class="sp-tab active" id="spTabTrace" onclick="switchSpTab('trace')">📄 Trace</button>
-    <button class="sp-tab" id="spTabSpans" onclick="switchSpTab('spans')">📊 Spans</button>
-    <button class="sp-tab" id="spTabScores" onclick="switchSpTab('scores')">⭐ Scores</button>
+  <div class="chat-bar">
+    <input id="chatInput" placeholder="输入问题..." onkeydown="if(event.key==='Enter')send()">
+    <button id="sendBtn" onclick="send()">发送</button>
   </div>
-  <div class="sp-body" id="spBody"></div>
 </div>
 
 <script>
-// ── Tab Switching ───────────────────────────────────────────────────
-function switchTab(name){
-  document.querySelectorAll('.tab').forEach(t=>t.classList.remove('active'));
-  document.querySelectorAll('.panel').forEach(p=>p.classList.remove('active'));
-  document.getElementById(name==='chat'?'tabChat':'tabDash').classList.add('active');
-  document.getElementById('panel-'+name).classList.add('active');
-  if(name==='dashboard'){loadDashboard();}
-}
-// ── Chat (SSE Streaming) ────────────────────────────────────────────
 let currentBubble=null;
+let currentTraceMode='sdk';
+
+function switchMode(mode){
+  currentTraceMode=mode;
+  document.getElementById('modeSdk').classList.toggle('active',mode==='sdk');
+  document.getElementById('modeOtel').classList.toggle('active',mode==='otel');
+}
 
 async function send(){
   const input=document.getElementById('chatInput');
@@ -410,7 +438,7 @@ async function send(){
 
   try{
     const resp=await fetch('/api/chat/stream',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q})});
+      headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,trace_mode:currentTraceMode})});
     const reader=resp.body.getReader();
     const dec=new TextDecoder();
     let buf='';
@@ -485,103 +513,21 @@ function appendMsg(role,text){
   document.getElementById('chatMsgs').appendChild(wrap);
   wrap.scrollIntoView({behavior:'smooth'});
 }
-// ── Dashboard ───────────────────────────────────────────────────────
-let autoTimer=null;
-function toggleAuto(){
-  const btn=document.getElementById('autoBtn');
-  if(autoTimer){clearInterval(autoTimer);autoTimer=null;btn.textContent='🔄 自动刷新: 关';btn.classList.remove('active');}
-  else{autoTimer=setInterval(loadDashboard,10000);btn.textContent='🔄 自动刷新: 开 (10s)';btn.classList.add('active');}
-}
-async function loadDashboard(){
-  try{
-    const[sum,traces]=await Promise.all([
-      fetch('/api/dashboard/summary').then(r=>r.json()),
-      fetch('/api/dashboard/traces?limit=30').then(r=>r.json())]);
-    document.getElementById('statsCards').innerHTML=
-      `<div class="stat-card"><div class="label">Trace 总数</div><div class="value">${sum.total_traces}</div></div>`+
-      `<div class="stat-card"><div class="label">成功</div><div class="value green">${sum.success_count}</div></div>`+
-      `<div class="stat-card"><div class="label">失败</div><div class="value red">${sum.error_count}</div></div>`+
-      `<div class="stat-card"><div class="label">平均总分</div><div class="value">${sum.avg_overall_score??'—'}</div></div>`+
-      `<div class="stat-card"><div class="label">Span 总数</div><div class="value">${sum.total_spans}</div></div>`+
-      `<div class="stat-card"><div class="label">评分数</div><div class="value">${sum.total_scores}</div></div>`;
-    const list=traces.traces||[];
-    if(!list.length){document.getElementById('tracesTable').innerHTML='<div class="empty">暂无 Trace</div>';return;}
-    let h='<table class="trace-table"><thead><tr><th>时间</th><th>查询</th><th>状态</th><th>总分</th><th>延迟</th></tr></thead><tbody>';
-    list.forEach(t=>{
-      const time=t.created_at?new Date(t.created_at).toLocaleString('zh-CN'):'—';
-      const sc=t.overall_score!=null?t.overall_score.toFixed(1):'—';
-      const scClr=t.overall_score>=80?'var(--green)':t.overall_score>=60?'var(--yellow)':'var(--red)';
-      h+=`<tr onclick="openPanel('${t.id}')"><td style="font-size:11px;color:var(--muted);white-space:nowrap">${time}</td>
-        <td>${esc(t.query)}</td>
-        <td><span class="badge ${t.status==='success'?'success':'error'}">${t.status}</span></td>
-        <td style="color:${scClr};font-weight:700">${sc}</td>
-        <td style="color:var(--muted)">${t.total_latency_ms?t.total_latency_ms+'ms':'—'}</td></tr>`;
-    });
-    h+='</tbody></table>';
-    document.getElementById('tracesTable').innerHTML=h;
-  }catch(e){console.error(e);}
-}
-// ── Side Panel ──────────────────────────────────────────────────────
-let _detailCache=null;
-async function openPanel(tid){
-  document.getElementById('overlay').classList.add('show');
-  document.getElementById('sidepanel').classList.add('show');
-  document.getElementById('spBody').innerHTML='<div class="empty">⏳ 加载中...</div>';
-  try{
-    const r=await fetch('/api/dashboard/traces/'+tid);
-    _detailCache=await r.json();
-    if(_detailCache.error){document.getElementById('spBody').innerHTML='<div class="empty">❌ '+_detailCache.error+'</div>';return;}
-    renderSpTab('trace');
-  }catch(e){document.getElementById('spBody').innerHTML='<div class="empty">❌ '+e.message+'</div>';}
-}
-function closePanel(){
-  document.getElementById('overlay').classList.remove('show');
-  document.getElementById('sidepanel').classList.remove('show');
-}
-function switchSpTab(name){
-  document.querySelectorAll('.sp-tab').forEach(t=>t.classList.remove('active'));
-  document.getElementById('spTab'+name.charAt(0).toUpperCase()+name.slice(1)).classList.add('active');
-  renderSpTab(name);
-}
-function renderSpTab(name){
-  const d=_detailCache; if(!d)return;
-  const body=document.getElementById('spBody');
-  if(name==='trace'){
-    const t=d.trace;
-    body.innerHTML=`<pre>${JSON.stringify({query:t.query,status:t.status,source:t.source,
-      overall_score:t.overall_score,total_latency_ms:t.total_latency_ms,
-      total_tokens:t.total_tokens,span_count:t.span_count,
-      span_distribution:t.span_distribution,created_at:t.created_at,
-      final_response:t.final_response},null,2)}</pre>`;
-  }else if(name==='spans'){
-    const spans=d.spans||[];
-    if(!spans.length){body.innerHTML='<div class="empty">暂无 Span</div>';return;}
-    body.innerHTML=spans.map(s=>`<div class="span-card">
-      <div class="s-head"><span class="s-type">[${s.sequence}] ${s.span_type}</span>
-        <span class="s-meta">${s.latency_ms||'—'}ms | ${s.model||'—'} | score:${s.score!=null?s.score:'—'}
-        ${s.tool_name?' | 🔧 '+s.tool_name:''}</span></div>
-      <div class="s-body">
-        <div><b style="color:var(--muted)">Input</b><pre>${JSON.stringify(s.input,null,2)}</pre></div>
-        <div><b style="color:var(--muted)">Output</b><pre>${JSON.stringify(s.output,null,2)}</pre></div>
-        ${s.tool_params?`<div><b style="color:var(--muted)">Tool Params</b><pre>${JSON.stringify(s.tool_params,null,2)}</pre></div>`:''}
-        ${s.tool_result?`<div><b style="color:var(--muted)">Tool Result</b><pre>${JSON.stringify(s.tool_result,null,2)}</pre></div>`:''}
-      </div></div>`).join('');
-  }else if(name==='scores'){
-    const scores=d.eval_scores||[];
-    body.innerHTML='<pre>'+JSON.stringify(scores,null,2)+'</pre>';
-  }
-}
 async function flushEvents(){
   const btn=document.querySelector('.btn-flush');btn.disabled=true;btn.textContent='⏳...';
   try{const r=await fetch('/api/flush',{method:'POST'});const d=await r.json();
-    alert('Flush: '+d.batches+' 批, 剩余 '+d.remaining);loadDashboard();}
+    alert('Flush: '+d.batches+' 批, 剩余 '+d.remaining);}
   catch(e){alert('失败: '+e.message);}
   btn.disabled=false;btn.textContent='📥 Flush';
 }
-function esc(s){const d=document.createElement('div');d.textContent=s;return d.innerHTML;}
 </script>
 </body>
 </html>"""
+
+
+@app.get("/", response_class=HTMLResponse)
+async def index():
+    return CHAT_HTML
 
 
 # ═══════════════════════════════════════════════════════════════════════════

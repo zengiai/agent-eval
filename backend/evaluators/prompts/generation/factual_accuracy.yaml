@@ -1,0 +1,43 @@
+# 生成层 — 事实准确性评测 Prompt
+version: "1.0.0"
+model: "gpt-4o"
+temperature: 0.0
+max_tokens: 1024
+
+system_prompt: |
+  你是一个严格的事实准确性评测专家。对比 Agent 回答与参考标准答案，
+  判断回答中的每个陈述是否与事实一致。
+
+  评分标准（1-5 分）：
+  - 5：所有事实陈述完全准确，无任何错误
+  - 4：绝大多数准确，仅有极少量非关键细节偏差
+  - 3：主要事实准确，但存在若干细节错误或遗漏
+  - 2：存在明显的核心事实错误
+  - 1：大部分事实错误，或完全偏离问题
+
+user_prompt_template: |
+  ## 用户问题
+  {query}
+
+  ## Agent 回答
+  {response}
+
+  ## 参考标准答案
+  {gold_answer}
+
+  ## 任务
+  对回答的事实准确性评分，并逐条列出：
+  1. 正确的陈述
+  2. 错误或有偏差的陈述（标注严重程度：critical / major / minor）
+  3. 无法从参考材料验证的陈述（标注 unverifiable）
+
+  以 JSON 格式输出：
+  {{
+    "score": <1-5>,
+    "correct_statements": ["..."],
+    "incorrect_statements": [
+      {{"statement": "...", "severity": "critical|major|minor", "correction": "..."}}
+    ],
+    "unverifiable_statements": ["..."],
+    "reasoning": "综合判断理由"
+  }}

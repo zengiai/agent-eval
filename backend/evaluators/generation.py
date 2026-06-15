@@ -1,18 +1,26 @@
-"""生成层评测器 (GenerationEvaluator) —— MVP 确定性部分。
+"""生成层评测器 (GenerationEvaluator)。
 
-LLM 维度（FactualAccuracy / Completeness / HallucinationScore / SemanticSimilarity）
-留待 Phase 2 接入 LLM-as-Judge 后补齐。
+混合评测：确定性维度（LanguageQuality / FormatCompliance）+ LLM Judge 维度（FactualAccuracy / Completeness / HallucinationScore）。
+SemanticSimilarity 暂用词重叠，后续可升级为 BERTScore。
 """
 
 import json
+import logging
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 from backend.evaluators.base import BaseEvaluator, EvalMethod
 
+logger = logging.getLogger(__name__)
+
 
 class GenerationEvaluator(BaseEvaluator):
-    """生成层评测：LanguageQuality / FormatCompliance（确定部分）。"""
+    """生成层评测：6 维度加权综合评分。
+
+    LLM 维度依赖 llm_judge 通过 context 传入：
+        context["llm_judge"] → LLMJudge 实例
+    无 LLM Judge 时，LLM 维度标记为 skipped（降级到 MVP 行为）。
+    """
 
     @property
     def layer_name(self) -> str:
@@ -20,7 +28,7 @@ class GenerationEvaluator(BaseEvaluator):
 
     @property
     def supported_methods(self):
-        return [EvalMethod.DETERMINISTIC]
+        return [EvalMethod.HYBRID]
 
     def _default_weights(self) -> Dict[str, float]:
         return {
@@ -32,22 +40,195 @@ class GenerationEvaluator(BaseEvaluator):
             "SemanticSimilarity": 0.15,
         }
 
+    # ── 获取 LLM Judge ──────────────────────────────────────────
+
+    def _get_llm_judge(self, context: Dict) -> Optional[Any]:
+        """从 context 中提取 LLMJudge 实例。"""
+        return context.get("llm_judge")
+
+    # ── 核心评测入口 ────────────────────────────────────────────
+
     def _evaluate_dimensions(self, span: Dict, expected: Dict, **context) -> Dict[str, Any]:
         response = span.get("output", {}).get("response", "") or context.get("final_response", "")
+        query = context.get("query", "")
         exp_answer = expected.get("expected_answer", {})
-        gold_answer = expected.get("gold_answer")
+        gold_answer = expected.get("gold_answer", "")
+        llm_judge = self._get_llm_judge(context)
 
         return {
-            # LLM 维度留待 Phase 2，MVP 阶段跳过
-            "FactualAccuracy": {"score": 100.0, "skipped": True, "note": "MVP: LLM Judge not yet integrated"},
-            "Completeness": self._calc_completeness(response, exp_answer) if not exp_answer.get("divergent_ok") else {"score": 100.0, "skipped": True, "reason": "divergent_ok"},
+            "FactualAccuracy": self._calc_factual_accuracy(response, query, gold_answer, llm_judge),
+            "Completeness": self._calc_completeness(response, query, exp_answer, llm_judge),
             "LanguageQuality": self._calc_language_quality(response),
             "FormatCompliance": self._calc_format_compliance(response, exp_answer),
-            "HallucinationScore": {"score": 100.0, "skipped": True, "note": "MVP: LLM Judge not yet integrated"},
-            "SemanticSimilarity": self._calc_semantic_sim(response, gold_answer) if gold_answer else {"score": 100.0, "skipped": True},
+            "HallucinationScore": self._calc_hallucination(response, query, gold_answer, llm_judge),
+            "SemanticSimilarity": self._calc_semantic_sim(response, gold_answer),
         }
 
-    # ---------- 计算子方法 ----------
+    # ── LLM Judge 维度 ──────────────────────────────────────────
+
+    def _calc_factual_accuracy(
+        self, response: str, query: str, gold_answer: str, llm_judge
+    ) -> dict:
+        """事实准确性：LLM Judge 评分 1-5 → 0-100。"""
+        if not response:
+            return {"score": 0.0, "error": "empty response"}
+
+        if llm_judge and llm_judge.is_available():
+            try:
+                result = llm_judge.judge_by_template(
+                    "generation/factual_accuracy",
+                    {
+                        "query": query or "(未提供问题)",
+                        "response": response,
+                        "gold_answer": gold_answer or "(未提供参考标准答案，请基于自身知识判断)",
+                    },
+                )
+                llm_score = result.get("score", 3)
+                return {
+                    "score": round((llm_score / 5) * 100, 2),
+                    "llm_score": llm_score,
+                    "judge_trace": result,
+                    "method": "llm_judge",
+                }
+            except Exception as e:
+                logger.warning("FactualAccuracy LLM 评测失败，回退跳过: %s", e)
+                return {"score": 100.0, "skipped": True, "error": str(e)}
+
+        return {"score": 100.0, "skipped": True, "note": "LLM Judge not available"}
+
+    def _calc_completeness(
+        self, response: str, query: str, exp_answer: Dict, llm_judge
+    ) -> dict:
+        """完整性：优先 LLM Judge 语义判断，回退关键词匹配。
+
+        发散型问题（divergent_ok=true）跳过此维度。
+        """
+        if exp_answer.get("divergent_ok"):
+            return {"score": 100.0, "skipped": True, "reason": "divergent_ok"}
+
+        check_points = exp_answer.get("check_points", [])
+        if not check_points:
+            return {"score": 100.0}
+
+        if not response:
+            return {"score": 0.0, "error": "empty response"}
+
+        # 优先 LLM Judge
+        if llm_judge and llm_judge.is_available():
+            try:
+                # 格式化检查点列表
+                cp_text = "\n".join(
+                    f"{i+1}. {cp.get('point', str(cp))} (匹配模式: {cp.get('match', 'must_contain')})"
+                    for i, cp in enumerate(check_points)
+                )
+                result = llm_judge.judge_by_template(
+                    "generation/completeness",
+                    {
+                        "query": query or "(未提供问题)",
+                        "response": response,
+                        "check_points": cp_text,
+                    },
+                )
+                return self._parse_completeness_llm_result(result, check_points)
+            except Exception as e:
+                logger.warning("Completeness LLM 评测失败，回退关键词匹配: %s", e)
+
+        # 回退：关键词匹配
+        return self._calc_completeness_keyword(response, check_points)
+
+    def _parse_completeness_llm_result(self, result: Dict, check_points: List[Dict]) -> dict:
+        """将 LLM completeness 结果转换为加权得分。"""
+        llm_results = result.get("results", [])
+        total_weight = 0.0
+        earned_weight = 0.0
+        details = []
+
+        for i, cp in enumerate(check_points):
+            point_text = cp.get("point", cp.get("key", str(cp)))
+            w = cp.get("weight", 1.0)
+            match_mode = cp.get("match", "must_contain")
+
+            # 从 LLM 结果中匹配对应检查点（按索引或文本模糊匹配）
+            llm_item = {}
+            if i < len(llm_results):
+                llm_item = llm_results[i]
+            coverage = llm_item.get("coverage", "not_covered")
+
+            detail = {
+                "point": point_text,
+                "match_mode": match_mode,
+                "coverage": coverage,
+                "weight": w,
+                "evidence": llm_item.get("evidence", ""),
+            }
+
+            if match_mode == "must_contain":
+                total_weight += w
+                if coverage == "fully_covered":
+                    earned_weight += w
+                elif coverage == "partially_covered":
+                    earned_weight += w * 0.5
+            elif match_mode == "prefer_contain":
+                total_weight += w
+                if coverage == "fully_covered":
+                    earned_weight += w
+                elif coverage == "partially_covered":
+                    earned_weight += w * 0.7
+                else:
+                    earned_weight += w * 0.5
+            elif match_mode == "nice_to_have":
+                if coverage in ("fully_covered", "partially_covered"):
+                    earned_weight += w * 0.5
+
+            details.append(detail)
+
+        score = (earned_weight / total_weight * 100) if total_weight > 0 else 100.0
+        return {
+            "score": round(min(score, 100), 2),
+            "details": details,
+            "forced_weight": total_weight,
+            "method": "llm_judge",
+            "llm_overall_completeness": result.get("overall_completeness"),
+        }
+
+    def _calc_hallucination(
+        self, response: str, query: str, gold_answer: str, llm_judge
+    ) -> dict:
+        """幻觉检测：LLM Judge 逐句标注 → 干净句比例 × 100。"""
+        if not response:
+            return {"score": 0.0, "error": "empty response"}
+
+        if llm_judge and llm_judge.is_available():
+            try:
+                ref_material = gold_answer if gold_answer else "(未提供参考材料)"
+                result = llm_judge.judge_by_template(
+                    "generation/hallucination",
+                    {
+                        "query": query or "(未提供问题)",
+                        "response": response,
+                        "reference_materials": ref_material,
+                    },
+                )
+                total = result.get("total_sentences", 1)
+                hallucination_count = result.get("hallucination_count", 0)
+                ratio = hallucination_count / max(total, 1)
+                score = max(0, (1 - ratio)) * 100
+                return {
+                    "score": round(score, 2),
+                    "total_sentences": total,
+                    "hallucination_count": hallucination_count,
+                    "hallucination_ratio": round(ratio, 4),
+                    "overall_severity": result.get("overall_severity", "unknown"),
+                    "judge_trace": result,
+                    "method": "llm_judge",
+                }
+            except Exception as e:
+                logger.warning("HallucinationScore LLM 评测失败，回退跳过: %s", e)
+                return {"score": 100.0, "skipped": True, "error": str(e)}
+
+        return {"score": 100.0, "skipped": True, "note": "LLM Judge not available"}
+
+    # ── 确定性维度 ───────────────────────────────────────────────
 
     def _calc_language_quality(self, response: str) -> dict:
         if not response:
@@ -87,7 +268,6 @@ class GenerationEvaluator(BaseEvaluator):
                 json.loads(response)
                 return {"score": 100.0}
             except (json.JSONDecodeError, TypeError):
-                # 尝试提取 ```json``` 代码块
                 match = re.search(r'```(?:json)?\s*(.*?)\s*```', response, re.DOTALL)
                 if match:
                     try:
@@ -99,7 +279,6 @@ class GenerationEvaluator(BaseEvaluator):
         return {"score": 100.0}
 
     def _calc_semantic_sim(self, response: str, gold_answer: str) -> dict:
-        # MVP 阶段：简单词重叠率
         if not gold_answer:
             return {"score": 100.0, "skipped": True}
         resp_words = set(response.lower().split())
@@ -110,11 +289,8 @@ class GenerationEvaluator(BaseEvaluator):
         score = min(overlap * 100, 100)
         return {"score": round(score, 2), "method": "word_overlap"}
 
-    def _calc_completeness(self, response: str, exp_answer: Dict) -> dict:
-        check_points = exp_answer.get("check_points", [])
-        if not check_points:
-            return {"score": 100.0}
-
+    def _calc_completeness_keyword(self, response: str, check_points: List[Dict]) -> dict:
+        """关键词匹配（LLM 不可用时的回退方案）。"""
         total_weight = 0.0
         earned_weight = 0.0
         details = []
@@ -137,9 +313,13 @@ class GenerationEvaluator(BaseEvaluator):
             elif match_mode == "nice_to_have":
                 if covered:
                     earned_weight += w * 0.5
-                # 不纳入 forced_total
 
             details.append(detail)
 
         score = (earned_weight / total_weight * 100) if total_weight > 0 else 100.0
-        return {"score": round(min(score, 100), 2), "details": details, "forced_weight": total_weight}
+        return {
+            "score": round(min(score, 100), 2),
+            "details": details,
+            "forced_weight": total_weight,
+            "method": "keyword_match",
+        }

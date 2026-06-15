@@ -340,6 +340,197 @@ provider.add_span_processor(
 
 两种方式写入 Redis 的数据结构完全一致，Ingest 消费者无感知。
 
+---
+
+### 6.3 Span 类型映射规则
+
+OTel 模式下，框架自动埋点产生的 Span 使用框架原生命名（如 `ChatOpenAI`、`retriever`、`llm_predict`），而评测系统需要标准化的 5 类 `span_type`（`intent`、`retrieval`、`tool_call`、`generation`、`outcome`）。`EvalSpanExporter` 通过**三层策略**自动完成映射推导。
+
+#### 三层映射策略
+
+```
+优先级：属性优先 → 模式匹配 → 兜底
+    │            │           │
+    │            │           └── 第 3 层：返回 span.name 原值
+    │            └── 第 2 层：span.name.lower() 包含匹配（最长匹配优先）
+    └── 第 1 层：span.attributes["eval.span_type"] 显式标注
+```
+
+**第 1 层 — 属性优先（最高优先级）**
+
+开发者可在 Span 属性中显式设置 `eval.span_type`，完全绕过所有自动推导逻辑：
+
+```python
+from opentelemetry import trace
+
+tracer = trace.get_tracer(__name__)
+with tracer.start_as_current_span("custom_processing") as span:
+    span.set_attribute("eval.span_type", "intent")
+    # → span_type = "intent"，不进入后续层
+```
+
+支持的合法值：`intent` / `retrieval` / `tool_call` / `generation` / `outcome`，以及别名 `"tool"`（自动映射为 `"tool_call"`）。非法值记录 WARNING 日志后降级到第 2 层。
+
+**第 2 层 — 模式匹配**
+
+当未设置 `eval.span_type` 属性时，对 `span.name.lower()` 执行包含匹配（substring match）。映射规则来源：
+
+| 来源 | 文件 | 优先级 | 容错 |
+|------|------|--------|------|
+| YAML 映射表 | `sdk/agent_eval_sdk/adapters/span_type_mapping.yaml` | 默认加载 | 不可用时使用硬编码 fallback |
+| 硬编码 fallback | `otel_exporter.py` `_FALLBACK_RULES` | YAML 不可用时启用 | 与 YAML 内容同步 |
+| 运行时自定义 | `EvalSpanExporter(span_type_rules={...})` | 覆盖前两者 | — |
+
+**最长匹配原则**：当多个 pattern 同时命中时，取 pattern 字符串最长者，确保更具体的规则生效。例如 `"chatopenai"`（9 字符）优先于 `"chat"`（4 字符），`"query_engine"`（12 字符）优先于 `"query"`（5 字符）。
+
+内置映射表覆盖范围：
+
+| span_type | 匹配的 span.name 模式 |
+|-----------|----------------------|
+| `generation` | `chatopenai`, `chat`, `llm`, `openai.chat`, `chain.invoke`, `chain`, `llm_predict`, `complete`, `model_response` |
+| `retrieval` | `retriever`, `retriev`, `similarity_search`, `vectorstore`, `query`, `retrieve`, `node_parser` |
+| `tool_call` | `tool`, `tool_call`, `function_call` |
+| `outcome` | `agentexecutor`, `agent`, `query_engine`, `openai_agent`, `agent_runner` |
+
+**第 3 层 — 兜底返回**
+
+当所有模式均不匹配时，直接返回 `span.name` 原值。这种方式保证了系统对未知框架的兼容性——span_name 虽然不一定精确对应五个标准类型之一，但数据不会丢失，可通过后续 Ingest 层或评测引擎做二次处理。
+
+#### 自定义映射
+
+```python
+from agent_eval_sdk.adapters import EvalSpanExporter
+
+exporter = EvalSpanExporter(
+    redis_url="redis://localhost:6379/0",
+    agent_version="v2.3.1",
+    span_type_rules={
+        "MyCustomLLM":    "generation",
+        "MySearchEngine": "retrieval",
+        "MyAgentRunner":  "outcome",
+    },
+)
+```
+
+自定义规则与内置规则合并，key 不区分大小写，自定义覆盖内置。
+
+#### YAML 映射表结构
+
+```yaml
+# sdk/agent_eval_sdk/adapters/span_type_mapping.yaml
+# 格式：pattern: span_type
+# 匹配方式：span.name.lower() 中包含 pattern 时触发
+
+# === LangChain ===
+chatopenai:         generation
+retriever:          retrieval
+tool:               tool_call
+
+# === LlamaIndex ===
+llm_predict:        generation
+query_engine:       outcome
+
+# === OpenAI Agents SDK ===
+function_call:      tool_call
+model_response:     generation
+```
+
+YAML + 硬编码 fallback 双重保障：即使 YAML 文件损坏或被误删，系统仍可正常工作。
+
+---
+
+### 6.4 不同 Agent 框架的兼容性
+
+OTel 适配器通过三层映射策略实现了对不同 Agent 框架的无侵入兼容。以下是各框架的接入方式和兼容性详情。
+
+#### 框架兼容性矩阵
+
+| 框架 | 接入方式 | span_type 获取方式 | 是否需要手动标注 | 覆盖完整度 | 备注 |
+|------|---------|-------------------|----------------|-----------|------|
+| **自研 Agent** | 自研 SDK（`TraceReporter`） | 代码显式传入 `span_type` 参数 | ❌ 不需要 | ★★★★★ | 完全控制，无需映射 |
+| **LangChain** | OTel 适配器（自动埋点） | 模式匹配（`chatopenai`→generation 等） | ❌ 不需要 | ★★★★☆ | 13 条内置规则，覆盖核心 Span |
+| **LlamaIndex** | OTel 适配器（自动埋点） | 模式匹配（`llm_predict`→generation 等） | ❌ 不需要 | ★★★★☆ | 6 条内置规则，覆盖核心 Span |
+| **OpenAI Agents SDK** | OTel 适配器（自动埋点） | 模式匹配 + 建议显式标注 | ⚠️ 建议标注 | ★★★☆☆ | 5 条内置规则，`function_call` 已覆盖；复杂 agent 链建议用 `eval.span_type` |
+| **其他 OTel 框架** | OTel 适配器 | 模式匹配（兜底） | ⚠️ 建议提供自定义映射表或显式标注 | ★★☆☆☆ | 内置映射表可能不覆盖，建议使用时传入 `span_type_rules` |
+| **任意 OTel 应用** | OTel 适配器 | 第 1 层属性标注 | ✅ 需要手动设置 `eval.span_type` | ★★★★★ | 最灵活，但需开发者主动标注 |
+
+#### 各框架 Span 映射详情
+
+**自研 Agent（SDK 模式）**
+
+```python
+from agent_eval_sdk import TraceReporter
+
+trace = reporter.start_trace(query="...", source="eval")
+trace.report_span(span_type="intent", ...)      # ← 显式传入
+trace.report_span(span_type="retrieval", ...)
+trace.report_span(span_type="generation", ...)
+```
+
+无需任何映射逻辑，直接使用标准 `span_type`。
+
+**LangChain**
+
+LangChain 自动埋点产生的典型 Span 名称及映射：
+
+| LangChain Span 名称 | OTel 适配器映射 | 说明 |
+|--------------------|----------------|------|
+| `ChatOpenAI` | `generation` | LLM 调用 |
+| `Retriever` | `retrieval` | 检索操作 |
+| `similarity_search` | `retrieval` | 向量检索 |
+| `tool` | `tool_call` | 工具调用 |
+| `AgentExecutor` | `outcome` | Agent 执行器 |
+| `chain.invoke` | `generation` | Chain 调用 |
+
+LangChain 的 `agent` 和 `agentexecutor` 模式的匹配顺序：「agentexecutor」（12 字符）优先于「agent」（5 字符），确保更具体的匹配生效。
+
+**LlamaIndex**
+
+| LlamaIndex Span 名称 | OTel 适配器映射 | 说明 |
+|----------------------|----------------|------|
+| `llm_predict` | `generation` | LLM 预测 |
+| `complete` | `generation` | 补全 |
+| `query_engine` | `outcome` | 查询引擎 |
+| `query` | `retrieval` | 查询 |
+| `retrieve` | `retrieval` | 检索 |
+| `node_parser` | `retrieval` | 文档解析 |
+
+LlamaIndex 的 `query_engine` 与 `query` 的匹配顺序：「query_engine」（12 字符）优先于「query」（5 字符），引擎级 Span 正确映射为 `outcome` 而非 `retrieval`。
+
+**OpenAI Agents SDK**
+
+| OpenAI Agent Span 名称 | OTel 适配器映射 | 说明 |
+|-----------------------|----------------|------|
+| `function_call` | `tool_call` | 函数调用 |
+| `tool_call` | `tool_call` | 工具调用（别名） |
+| `model_response` | `generation` | 模型响应 |
+| `openai_agent` | `outcome` | Agent 运行 |
+| `agent_runner` | `outcome` | Agent 执行器 |
+
+对于复杂 Agent 链或自定义 Span，建议设置 `eval.span_type` 属性以绕过模式匹配的不确定性。
+
+#### 接入新框架指南
+
+对任意支持 OpenTelemetry 的 Agent 框架，有三种接入方式，按推荐度排序：
+
+1. **提供自定义映射表**（推荐）：
+   ```python
+   EvalSpanExporter(span_type_rules={
+       "my_framework.llm": "generation",
+       "my_framework.search": "retrieval",
+       "my_framework.runner": "outcome",
+   })
+   ```
+
+2. **在 Span 属性中设置 `eval.span_type`**（最精确）：
+   ```python
+   span.set_attribute("eval.span_type", "generation")
+   ```
+
+3. **依赖兜底机制**（零配置，精度最低）：
+   不传任何规则，span_type 将直接使用 `span.name`。评测引擎会收到非标准 span_type，但数据不会丢失。
+
+---
 
 ## 7. Redis 缓冲与消费策略
 

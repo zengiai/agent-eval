@@ -12,8 +12,8 @@ class Settings(BaseSettings):
     """全局配置（env / .env 模式，用于独立部署）。"""
 
     # 数据库
-    DATABASE_URL: str = "postgresql+asyncpg://aura:aura@localhost:5432/agent_eval"
-    DATABASE_URL_SYNC: str = "postgresql+psycopg2://aura:aura@localhost:5432/agent_eval"
+    DATABASE_URL: str = "postgresql+asyncpg://aura:aura@localhost:5433/agent_eval"
+    DATABASE_URL_SYNC: str = "postgresql+psycopg2://aura:aura@localhost:5433/agent_eval"
 
     # Redis
     REDIS_URL: str = "redis://localhost:6379/0"
@@ -45,7 +45,10 @@ class Settings(BaseSettings):
     SAMPLING_DAILY_LIMIT: int = 100
     SAMPLING_RATIO: float = 0.05
 
-    model_config = {"env_file": ".env", "extra": "ignore"}
+    model_config = {
+        "env_file": str(Path(__file__).resolve().parent.parent / ".env"),
+        "extra": "ignore",
+    }
 
 
 settings = Settings()

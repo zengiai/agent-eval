@@ -77,11 +77,11 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
     if not run:
         raise HTTPException(status_code=404, detail="Run not found")
 
-    # 查询关联的评测得分（通过 trace_id 直接查询，含 Outcome 层 span_id=NULL）
+    # 查询关联的评测得分（通过 eval_run_id 精准关联，而非 trace_id）
     scores = None
     if run.trace_id:
         result = await db.execute(
-            select(EvalScore).where(EvalScore.trace_id == run.trace_id)
+            select(EvalScore).where(EvalScore.eval_run_id == run.id)
         )
         eval_scores = result.scalars().all()
         scores = [

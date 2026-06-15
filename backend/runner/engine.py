@@ -1,10 +1,13 @@
 """评测编排器 —— 控制五层评测的执行顺序、并行调度、异常处理和加权汇总。"""
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Any
 
 from backend.evaluators.registry import evaluator_registry
 from backend.evaluators.base import EvalResult
+
+logger = logging.getLogger(__name__)
 
 
 class EvaluationOrchestrator:
@@ -16,6 +19,11 @@ class EvaluationOrchestrator:
       Phase 3: Generation（依赖 Tool 结果）
       Phase 4: Outcome（依赖全部前序层结果）
       Phase 5: 计算加权总分（仅纳入启用的层）
+
+    LLM Judge 集成：
+      通过 config["llm"] 传入 LLM 配置 dict：
+        {"model": "gpt-4o", "api_key": "sk-xxx", "base_url": "...", ...}
+      引擎自动创建 LLMJudge 实例并通过 context 传递给各评测器。
     """
 
     LAYER_WEIGHTS = {
@@ -39,6 +47,23 @@ class EvaluationOrchestrator:
         self.layer_weights = self.config.get("layer_weights", self.LAYER_WEIGHTS)
         self.enabled_layers = set(self.config.get("enabled_layers", list(self.LAYER_WEIGHTS.keys())))
         self._validate_enabled_layers()
+
+        # ── LLM Judge 初始化 ─────────────────────────────────────
+        self._llm_judge = None
+        llm_config = self.config.get("llm")
+        if llm_config and llm_config.get("api_key"):
+            try:
+                from backend.runner.llm_judge import LLMJudge
+                self._llm_judge = LLMJudge(
+                    model=llm_config.get("model", "gpt-4o"),
+                    api_key=llm_config["api_key"],
+                    base_url=llm_config.get("base_url", "https://api.openai.com/v1"),
+                    temperature=llm_config.get("temperature", 0.0),
+                    max_retries=llm_config.get("max_retries", 3),
+                )
+                logger.info("LLM Judge 已初始化: model=%s", llm_config.get("model", "gpt-4o"))
+            except Exception as e:
+                logger.warning("LLM Judge 初始化失败，LLM 维度将跳过: %s", e)
 
     def _validate_enabled_layers(self):
         """确保依赖链完整：若启用下游层，自动补全所有上游依赖（迭代至收敛）。"""
@@ -64,7 +89,12 @@ class EvaluationOrchestrator:
         spans = trace.get("spans", [])
         span_map = self._group_spans_by_type(spans)
         results: Dict[str, EvalResult] = {}
-        context = {"trace": trace, "all_spans": spans, "query": trace.get("query", "")}
+        context = {
+            "trace": trace,
+            "all_spans": spans,
+            "query": trace.get("query", ""),
+            "llm_judge": self._llm_judge,
+        }
 
         enabled = self.enabled_layers
 

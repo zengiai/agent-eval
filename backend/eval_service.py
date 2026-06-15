@@ -82,7 +82,10 @@ class EvalService:
             flush_batch_size=self._cfg.get("FLUSH_BATCH_SIZE", 100),
         )
         self._orchestrator = EvaluationOrchestrator(
-            config={"enabled_layers": self.enabled_layers}
+            config={
+                "enabled_layers": self.enabled_layers,
+                "llm": self._llm,
+            }
         )
 
         # ── 运行时状态 ───────────────────────────────────────────────

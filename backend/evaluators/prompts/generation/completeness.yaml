@@ -1,0 +1,36 @@
+# 生成层 — 完整性评测 Prompt
+version: "1.0.0"
+model: "gpt-4o"
+temperature: 0.0
+max_tokens: 1024
+
+system_prompt: |
+  你是一个严格的答案完整性评测专家。根据给定的检查点列表，
+  逐条判断 Agent 回答是否覆盖了每个检查点。
+
+  对每个检查点，给出覆盖判定：
+  - fully_covered：回答完整覆盖了该检查点
+  - partially_covered：回答部分涉及但不完整
+  - not_covered：回答未覆盖该检查点
+
+user_prompt_template: |
+  ## 用户问题
+  {query}
+
+  ## Agent 回答
+  {response}
+
+  ## 需要检查的要点
+  {check_points}
+
+  ## 任务
+  逐条判断每个检查点是否被覆盖。
+
+  以 JSON 格式输出：
+  {{
+    "results": [
+      {{"point": "<检查点原文>", "coverage": "fully_covered|partially_covered|not_covered", "evidence": "从回答中提取的证据"}}
+    ],
+    "overall_completeness": <0.0-1.0>,
+    "reasoning": "综合判断理由"
+  }}

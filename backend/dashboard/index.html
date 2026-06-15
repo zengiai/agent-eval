@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Eval Dashboard</title>
+<style>
+  :root {
+    --bg: #f5f7fa;
+    --card-bg: #fff;
+    --text: #1a1a2e;
+    --text-secondary: #6b7280;
+    --border: #e5e7eb;
+    --primary: #4f46e5;
+    --primary-hover: #4338ca;
+    --success: #059669;
+    --warning: #d97706;
+    --danger: #dc2626;
+    --radius: 10px;
+    --shadow: 0 1px 3px rgba(0,0,0,.08), 0 1px 2px rgba(0,0,0,.06);
+  }
+  * { margin:0; padding:0; box-sizing:border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: var(--bg); color: var(--text); min-height: 100vh; }
+  .header { background: var(--card-bg); border-bottom: 1px solid var(--border); padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; font-weight: 700; }
+  .header .stats { display: flex; gap: 20px; font-size: 13px; color: var(--text-secondary); }
+  .header .stats span { font-weight: 600; color: var(--text); }
+  .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+
+  .tabs { display: flex; gap: 0; margin-bottom: 24px; border-bottom: 2px solid var(--border); }
+  .tab-btn { padding: 10px 24px; border: none; background: none; font-size: 15px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .2s; }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+
+  .toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
+  .toolbar input, .toolbar select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; transition: border-color .2s; }
+  .toolbar input:focus, .toolbar select:focus { border-color: var(--primary); }
+  .toolbar input { flex: 1; min-width: 240px; }
+  .toolbar select { min-width: 140px; }
+
+  .btn { padding: 8px 16px; border: none; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; transition: all .2s; white-space: nowrap; }
+  .btn-primary { background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); }
+  .btn-success { background: var(--success); color: #fff; }
+  .btn-success:hover { background: #047857; }
+  .btn-outline { background: transparent; border: 1px solid var(--border); color: var(--text); }
+  .btn-outline:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-sm { padding: 4px 10px; font-size: 12px; }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  .card { background: var(--card-bg); border-radius: var(--radius); border: 1px solid var(--border); overflow: hidden; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th { background: #f9fafb; padding: 12px 16px; text-align: left; font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); border-bottom: 1px solid var(--border); }
+  td { padding: 12px 16px; border-bottom: 1px solid var(--border); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr.clickable { cursor: pointer; }
+  tr.clickable:hover { background: #eef2ff; }
+  td.query { max-width: 280px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 20px; font-size: 11px; font-weight: 600; }
+  .badge-eval { background: #dbeafe; color: #1e40af; }
+  .badge-production { background: #fef3c7; color: #92400e; }
+  .badge-success { background: #d1fae5; color: #065f46; }
+  .badge-error { background: #fee2e2; color: #991b1b; }
+  .badge-trace { background: #ede9fe; color: #6b21a8; }
+  .badge-manual { background: #e0e7ff; color: #3730a3; }
+  .badge-llm { background: #fce7f3; color: #9d174d; }
+
+  .score-cell { font-weight: 700; font-size: 15px; }
+  .score-high { color: var(--success); }
+  .score-mid { color: var(--warning); }
+  .score-low { color: var(--danger); }
+
+  .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 16px; }
+  .pagination span { font-size: 13px; color: var(--text-secondary); }
+
+  /* ═══ 侧滑抽屉 ═══ */
+  .slide-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1000; }
+  .slide-overlay.show { display: block; }
+  .slide-panel { position: fixed; top: 0; right: 0; width: 560px; max-width: 100vw; height: 100vh; background: var(--card-bg); box-shadow: -4px 0 24px rgba(0,0,0,.12); z-index: 1001; transform: translateX(100%); transition: transform .3s ease; display: flex; flex-direction: column; }
+  .slide-panel.show { transform: translateX(0); }
+  .slide-header { padding: 16px 20px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; flex-shrink: 0; }
+  .slide-header h3 { font-size: 18px; margin: 0; }
+  .slide-close { background: none; border: none; font-size: 24px; cursor: pointer; color: var(--text-secondary); padding: 4px 8px; border-radius: 4px; line-height: 1; }
+  .slide-close:hover { background: #f3f4f6; color: var(--text); }
+  .slide-tabs { display: flex; border-bottom: 1px solid var(--border); flex-shrink: 0; }
+  .slide-tab { padding: 10px 18px; border: none; background: none; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .2s; }
+  .slide-tab:hover { color: var(--text); }
+  .slide-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .slide-body { flex: 1; overflow-y: auto; padding: 20px; }
+  .slide-body pre { background: #f9fafb; border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 300px; }
+  .slide-body hr { margin: 14px 0; border: none; border-top: 1px solid var(--border); }
+
+  .toast { position: fixed; top: 24px; right: 24px; padding: 12px 24px; border-radius: 8px; font-size: 14px; font-weight: 600; color: #fff; z-index: 2000; transform: translateX(120%); transition: transform .3s; }
+  .toast.show { transform: translateX(0); }
+  .toast-success { background: var(--success); }
+  .toast-error { background: var(--danger); }
+
+  .empty-state { text-align: center; padding: 48px 24px; color: var(--text-secondary); }
+  .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
+  .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #e5e7eb; border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📊 Agent Eval Dashboard <span style="font-size:11px;color:var(--text-secondary);font-weight:400;">v250404</span></h1>
+  <div class="stats">
+    用例: <span id="stat-cases">-</span>
+    Trace: <span id="stat-traces">-</span>
+  </div>
+</div>
+
+<div class="container">
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="traces">🔍 Traces</button>
+    <button class="tab-btn" data-tab="cases">📋 Cases</button>
+  </div>
+
+  <!-- Traces 面板 -->
+  <div id="panel-traces">
+    <div class="toolbar">
+      <input type="text" id="trace-search" placeholder="搜索 Trace query...">
+      <select id="trace-source">
+        <option value="">全部来源</option>
+        <option value="eval">eval</option>
+        <option value="production">production</option>
+      </select>
+      <select id="trace-status">
+        <option value="">全部状态</option>
+        <option value="success">success</option>
+        <option value="error">error</option>
+      </select>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px;color:var(--text-secondary);cursor:pointer;">
+        <input type="checkbox" id="only-without-case"> 仅未转Case
+      </label>
+      <button class="btn btn-primary" id="btn-search-traces">搜索</button>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Query</th><th>来源</th><th>状态</th><th>得分</th><th>耗时</th><th>时间</th><th>操作</th></tr></thead>
+        <tbody id="trace-tbody"><tr><td colspan="7" class="empty-state"><div class="icon">🔍</div>暂无数据</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="trace-pagination"></div>
+  </div>
+
+  <!-- Cases 面板 -->
+  <div id="panel-cases" style="display:none;">
+    <div class="toolbar">
+      <input type="text" id="case-search" placeholder="搜索 Case query...">
+      <select id="case-source">
+        <option value="">全部来源</option>
+        <option value="manual">manual</option>
+        <option value="trace">trace</option>
+        <option value="llm_auto">llm_auto</option>
+        <option value="llm_reviewed">llm_reviewed</option>
+        <option value="hybrid">hybrid</option>
+      </select>
+      <select id="case-difficulty">
+        <option value="">全部难度</option>
+        <option value="easy">easy</option>
+        <option value="medium">medium</option>
+        <option value="hard">hard</option>
+      </select>
+      <button class="btn btn-primary" id="btn-search-cases">搜索</button>
+      <button class="btn btn-outline" id="btn-create-case">+ 新建 Case</button>
+    </div>
+    <div class="card">
+      <table>
+        <thead><tr><th>Query</th><th>来源</th><th>难度</th><th>分类</th><th>最近均分</th><th>执行次数</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="case-tbody"><tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无数据</td></tr></tbody>
+      </table>
+    </div>
+    <div class="pagination" id="case-pagination"></div>
+  </div>
+</div>
+
+<!-- Toast -->
+<div class="toast" id="toast"></div>
+
+<!-- ═══ 侧滑抽屉 ═══ -->
+<div class="slide-overlay" id="slide-overlay" onclick="closeSlidePanel()"></div>
+<div class="slide-panel" id="slide-panel">
+  <div class="slide-header">
+    <h3 id="slide-title">详情</h3>
+    <button class="slide-close" onclick="closeSlidePanel()">✕</button>
+  </div>
+  <div class="slide-tabs" id="slide-tabs" style="display:none;"></div>
+  <div class="slide-body" id="slide-body"></div>
+</div>
+
+<script>
+const API_BASE = '/api';
+
+// ═══ 工具函数 ═══
+function $(sel) { return document.querySelector(sel); }
+function $$(sel) { return document.querySelectorAll(sel); }
+
+function showToast(msg, type='success') {
+  const t = $('#toast');
+  t.textContent = msg;
+  t.className = `toast toast-${type} show`;
+  setTimeout(() => t.classList.remove('show'), 2500);
+}
+
+function formatDate(d) { return new Date(d).toLocaleString('zh-CN'); }
+function scoreClass(s) { return s >= 80 ? 'score-high' : s >= 50 ? 'score-mid' : 'score-low'; }
+function sourceBadge(s) {
+  const map = { eval:'badge-eval', production:'badge-production' };
+  return `<span class="badge ${map[s]||'badge-eval'}">${s}</span>`;
+}
+function caseSourceBadge(s) {
+  const map = { manual:'badge-manual', trace:'badge-trace', llm_auto:'badge-llm', llm_reviewed:'badge-llm', hybrid:'badge-llm' };
+  return `<span class="badge ${map[s]||'badge-manual'}">${s}</span>`;
+}
+function statusBadge(s) {
+  return s === 'success' ? `<span class="badge badge-success">${s}</span>` : `<span class="badge badge-error">${s}</span>`;
+}
+
+// ═══ 侧滑抽屉 ═══
+let _slideTabs = {};
+
+function openSlidePanel(title, bodyHtml, tabs) {
+  $('#slide-title').textContent = title;
+  $('#slide-body').innerHTML = bodyHtml;
+  _slideTabs = tabs || {};
+
+  const tabsEl = $('#slide-tabs');
+  const tabKeys = Object.keys(_slideTabs);
+  if (tabKeys.length > 1) {
+    tabsEl.style.display = 'flex';
+    tabsEl.innerHTML = tabKeys.map((key, i) =>
+      `<button class="slide-tab${i === 0 ? ' active' : ''}" data-tab="${key}" onclick="switchSlideTab('${key}')">${_slideTabs[key].label}</button>`
+    ).join('');
+  } else {
+    tabsEl.style.display = 'none';
+  }
+
+  $('#slide-overlay').classList.add('show');
+  $('#slide-panel').classList.add('show');
+}
+
+function switchSlideTab(key) {
+  const tab = _slideTabs[key];
+  if (!tab) return;
+  $('#slide-body').innerHTML = tab.html;
+  $$('#slide-tabs .slide-tab').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.tab === key);
+  });
+}
+
+function closeSlidePanel() {
+  $('#slide-overlay').classList.remove('show');
+  $('#slide-panel').classList.remove('show');
+}
+
+// ═══ Tab 切换 ═══
+$$('.tab-btn').forEach(btn => btn.addEventListener('click', function() {
+  $$('.tab-btn').forEach(b => b.classList.remove('active'));
+  this.classList.add('active');
+  const tab = this.dataset.tab;
+  $('#panel-traces').style.display = tab === 'traces' ? '' : 'none';
+  $('#panel-cases').style.display = tab === 'cases' ? '' : 'none';
+  if (tab === 'traces') loadTraces();
+  else loadCases();
+}));
+
+// ═══ Traces ═══
+let tracePage = 0;
+async function loadTraces(page = 0) {
+  tracePage = page;
+  const params = new URLSearchParams();
+  const search = $('#trace-search').value;
+  if (search) params.set('search', search);
+  const source = $('#trace-source').value;
+  if (source) params.set('source', source);
+  const status = $('#trace-status').value;
+  if (status) params.set('status', status);
+  if ($('#only-without-case').checked) params.set('only_without_case', 'true');
+  params.set('limit', '20');
+  params.set('offset', String(page * 20));
+
+  try {
+    const res = await fetch(`${API_BASE}/cases/traces/list?${params}`);
+    const data = await res.json();
+    renderTraces(data);
+    $('#stat-traces').textContent = data.total;
+  } catch(e) {
+    showToast('加载 Trace 列表失败', 'error');
+  }
+}
+
+function renderTraces(data) {
+  const tbody = $('#trace-tbody');
+  if (!data.items.length) {
+    tbody.innerHTML = '<tr><td colspan="7" class="empty-state"><div class="icon">🔍</div>暂无 Trace 数据</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.items.map(t => `
+    <tr class="clickable" onclick="viewTraceDetail('${t.id}')">
+      <td class="query" title="${escapeHtml(t.query)}">${escapeHtml(t.query)}</td>
+      <td>${sourceBadge(t.source)}</td>
+      <td>${statusBadge(t.status)}</td>
+      <td class="score-cell"><span class="${scoreClass(t.overall_score||0)}">${t.overall_score != null ? t.overall_score.toFixed(1) : '-'}</span></td>
+      <td>${t.total_latency_ms != null ? (t.total_latency_ms/1000).toFixed(2)+'s' : '-'}</td>
+      <td style="font-size:12px;color:var(--text-secondary);">${formatDate(t.created_at)}</td>
+      <td>
+        ${t.already_case
+          ? `<span class="badge badge-trace" style="margin-right:4px;">📋 已转Case</span><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();viewTraceDetail('${t.id}')">查看</button>`
+          : `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();convertTraceToCase('${t.id}')">→ Case</button>`}
+      </td>
+    </tr>
+  `).join('');
+
+  const pag = $('#trace-pagination');
+  pag.innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="loadTraces(${Math.max(0, tracePage-1)})" ${tracePage===0?'disabled':''}>上一页</button>
+    <span>第 ${tracePage+1} 页 / 共 ${Math.ceil(data.total/20)} 页（${data.total} 条）</span>
+    <button class="btn btn-outline btn-sm" onclick="loadTraces(${tracePage+1})" ${(tracePage+1)*20>=data.total?'disabled':''}>下一页</button>`;
+}
+
+async function viewTraceDetail(traceId) {
+  openSlidePanel('Trace 详情', '<div style="text-align:center;padding:40px;"><span class="spinner"></span> 加载中…</div>');
+  try {
+    const res = await fetch(`${API_BASE}/cases/traces/${traceId}`);
+    if (!res.ok) { const err = await res.json(); throw new Error(err.detail || '加载失败'); }
+    const data = await res.json();
+    const t = data.trace;
+    const spans = data.spans || [];
+    const scores = data.eval_scores || [];
+
+    const overviewHtml = `
+      <p><strong>Query:</strong> ${escapeHtml(t.query || '-')}</p>
+      <p><strong>状态:</strong> ${statusBadge(t.status)} &nbsp; <strong>来源:</strong> ${sourceBadge(t.source)}</p>
+      <p><strong>综合得分:</strong> <span class="${scoreClass(t.overall_score||0)}" style="font-size:20px;font-weight:700;">${t.overall_score != null ? t.overall_score.toFixed(1) : '-'}</span></p>
+      <p><strong>总耗时:</strong> ${t.total_latency_ms != null ? (t.total_latency_ms/1000).toFixed(2)+'s' : '-'} &nbsp;|&nbsp; <strong>总Token:</strong> ${t.total_tokens || '-'}</p>
+      <p><strong>Span 数量:</strong> ${t.span_count} &nbsp;|&nbsp; <strong>时间:</strong> ${formatDate(t.created_at)}</p>
+      ${t.span_distribution ? `
+        <hr>
+        <p><strong>Span 分布:</strong></p>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${Object.entries(t.span_distribution).map(([type, count]) =>
+          `<span class="badge badge-eval">${type}: ${count}</span>`
+        ).join('')}</div>
+      ` : ''}
+      ${t.final_response ? `<hr><p><strong>Final Response:</strong></p><pre>${escapeHtml(t.final_response)}</pre>` : ''}
+    `;
+
+    // 构建 span_id → eval_score 映射，用于在下文 Spans 卡片中内嵌各维度打分
+    const spanScoreMap = {};
+    const orphanScores = [];
+    for (const sc of scores) {
+      if (sc.span_id) { spanScoreMap[sc.span_id] = sc; }
+      else { orphanScores.push(sc); }
+    }
+    const layerNames = {intent:'🎯 意图', retrieval:'📚 检索', tool_call:'🔧 工具', generation:'💬 生成', outcome:'🏁 结果'};
+
+    const spansHtml = spans.length ? spans.map(sp => {
+      const escore = spanScoreMap[sp.id];
+      let dimBadges = '';
+      let scoreDisplay = '';
+      if (escore && escore.metrics) {
+        const dims = escore.metrics;
+        const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
+        dimBadges = dimKeys.filter(dk => typeof dims[dk] === 'object' && dims[dk] !== null && 'score' in dims[dk])
+          .map(dk => {
+            const dv = dims[dk];
+            const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+            const skipped = dv.skipped ? ' ⏭️' : '';
+            return '<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:var(--text-secondary);">' + dk + skipped + ': <b style="color:' + dClr + ';">' + dv.score.toFixed(1) + '</b></span>';
+          }).join('');
+        const scClr = escore.score >= 80 ? 'var(--success)' : escore.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+        scoreDisplay = ' | 得分: <b style="color:' + scClr + ';">' + escore.score.toFixed(1) + '</b>';
+      }
+
+      const label = layerNames[sp.span_type] || sp.span_type;
+      return '<div style="margin-bottom:10px;padding:12px;border:1px solid var(--border);border-radius:8px;">'
+        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
+        + '<span class="badge badge-eval">#' + sp.sequence + ' ' + label + '</span>'
+        + '<span style="font-size:12px;color:var(--text-secondary);">' + (sp.latency_ms != null ? sp.latency_ms + 'ms' : '-') + ' | ' + (sp.tokens || 0) + ' tokens' + scoreDisplay + '</span>'
+        + '</div>'
+        + (sp.model ? '<p style="font-size:12px;color:var(--text-secondary);">Model: ' + escapeHtml(sp.model) + '</p>' : '')
+        + (sp.tool_name ? '<p style="font-size:12px;color:var(--text-secondary);">Tool: ' + escapeHtml(sp.tool_name) + (sp.tool_params ? ' ' + escapeHtml(JSON.stringify(sp.tool_params)) : '') + '</p>' : '')
+        + (dimBadges ? '<div style="margin:6px 0;padding:6px 10px;background:#f0fdf4;border-radius:4px;border-left:3px solid var(--success);">' + dimBadges + '</div>' : (escore ? '<div style="margin:6px 0;padding:4px 10px;background:#f9fafb;border-radius:4px;font-size:12px;color:var(--text-secondary);">综合: <b>' + escore.score.toFixed(1) + '</b> <span class="badge badge-llm" style="font-size:10px;">' + (escore.method || '-') + '</span></div>' : ''))
+        + (sp.input ? '<p style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>Input:</strong></p><pre style="max-height:100px;">' + escapeHtml(typeof sp.input === 'string' ? sp.input : JSON.stringify(sp.input, null, 2)) + '</pre>' : '')
+        + (sp.output ? '<p style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>Output:</strong></p><pre style="max-height:100px;">' + escapeHtml(typeof sp.output === 'string' ? sp.output : JSON.stringify(sp.output, null, 2)) + '</pre>' : '')
+        + '</div>';
+    }).join('') : '<div class="empty-state"><div class="icon">📄</div>暂无 Span 数据</div>';
+
+    const scoresHtml = scores.length ? scores.map(sc => {
+      const dims = sc.metrics || {};
+      const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
+      const dimDetail = dimKeys.filter(dk => typeof dims[dk] === 'object' && dims[dk] !== null && 'score' in dims[dk])
+        .map(dk => {
+          const dv = dims[dk];
+          const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+          const skipped = dv.skipped ? ' ⏭️' : '';
+          const method = dv.method ? ` [${dv.method}]` : '';
+          return `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0;padding-left:16px;">↳ ${dk}${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b></div>`;
+        }).join('');
+      const layerLabel = sc.layer ? (layerNames[sc.layer] || sc.layer) : (sc.span_id ? '(orphan)' : '🏁 结果');
+      const linkedSpan = sc.span_id ? spans.find(sp => sp.id === sc.span_id) : null;
+      const spanRef = linkedSpan ? ` ← #${linkedSpan.sequence} ${layerNames[linkedSpan.span_type] || linkedSpan.span_type}` : '';
+      return `<div style="margin-bottom:8px;padding:10px;background:#f9fafb;border-radius:6px;border-left:3px solid var(--primary);">
+        <div style="font-weight:600;">${layerLabel} <span style="color:${sc.score >= 80 ? 'var(--success)' : sc.score >= 60 ? 'var(--warning)' : 'var(--danger)'};">${sc.score.toFixed(1)}</span> <span class="badge badge-llm" style="font-size:10px;">${sc.method||'-'}</span><span style="font-size:11px;color:var(--text-secondary);margin-left:4px;">${spanRef}</span></div>
+        ${dimDetail}
+      </div>`;
+    }).join('') : '<div class="empty-state"><div class="icon">📊</div>暂无评分数据</div>';
+
+    openSlidePanel(`Trace: ${escapeHtml((t.query||'').substring(0, 40))}`, overviewHtml, {
+      overview: { label: '概览', html: overviewHtml },
+      spans: { label: `Spans (${spans.length})`, html: spansHtml },
+      scores: { label: `评分 (${scores.length})`, html: scoresHtml },
+    });
+  } catch(e) {
+    openSlidePanel('错误', `<p style="color:var(--danger);">❌ ${escapeHtml(e.message)}</p>`);
+  }
+}
+
+async function convertTraceToCase(traceId) {
+  if (!confirm('确认将该 Trace 转为评测用例？')) return;
+  try {
+    const res = await fetch(`${API_BASE}/cases/from-trace/${traceId}`, { method: 'POST', headers: {'Content-Type':'application/json'}, body: '{}' });
+    if (!res.ok) { const err = await res.json(); throw new Error(err.detail || '转换失败'); }
+    showToast('✅ Trace 已成功转为 Case');
+    loadTraces(tracePage);
+    loadCaseStats();
+  } catch(e) {
+    showToast('❌ ' + e.message, 'error');
+  }
+}
+
+// ═══ Cases ═══
+let casePage = 0;
+async function loadCases(page = 0) {
+  casePage = page;
+  const params = new URLSearchParams();
+  const search = $('#case-search').value;
+  if (search) params.set('search', search);
+  const source = $('#case-source').value;
+  if (source) params.set('source', source);
+  const difficulty = $('#case-difficulty').value;
+  if (difficulty) params.set('difficulty', difficulty);
+  params.set('limit', '20');
+  params.set('offset', String(page * 20));
+
+  try {
+    const res = await fetch(`${API_BASE}/cases?${params}`);
+    const data = await res.json();
+    renderCases(data);
+    $('#stat-cases').textContent = data.total;
+  } catch(e) {
+    showToast('加载 Case 列表失败', 'error');
+  }
+}
+
+function renderCases(data) {
+  const tbody = $('#case-tbody');
+  if (!data.items.length) {
+    tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无用例</td></tr>';
+    return;
+  }
+  tbody.innerHTML = data.items.map(c => `
+    <tr>
+      <td class="query" title="${escapeHtml(c.query)}">${escapeHtml(c.query)}</td>
+      <td>${caseSourceBadge(c.source)}</td>
+      <td>${c.difficulty}</td>
+      <td>${c.category || '-'}</td>
+      <td class="score-cell"><span class="${scoreClass(c.last_avg_score||0)}">${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</span></td>
+      <td>${c.run_count}</td>
+      <td><span class="badge ${c.is_active?'badge-success':'badge-error'}">${c.health_status}</span></td>
+      <td style="display:flex;gap:6px;">
+        ${c.source_trace_id
+          ? `<button class="btn btn-outline btn-sm" onclick="viewTraceDetail('${c.source_trace_id}')">详情</button>`
+          : `<button class="btn btn-outline btn-sm" onclick="viewCaseDetail('${c.id}')">详情</button>`}
+        ${c.source_trace_id
+          ? `<button class="btn btn-success btn-sm" onclick="evaluateCase('${c.id}')">▶ 评分</button>`
+          : '<button class="btn btn-outline btn-sm" disabled title="该 Case 无关联 Trace">无Trace</button>'}
+      </td>
+    </tr>
+  `).join('');
+
+  const pag = $('#case-pagination');
+  pag.innerHTML = `
+    <button class="btn btn-outline btn-sm" onclick="loadCases(${Math.max(0, casePage-1)})" ${casePage===0?'disabled':''}>上一页</button>
+    <span>第 ${casePage+1} 页 / 共 ${Math.ceil(data.total/20)} 页（${data.total} 条）</span>
+    <button class="btn btn-outline btn-sm" onclick="loadCases(${casePage+1})" ${(casePage+1)*20>=data.total?'disabled':''}>下一页</button>`;
+}
+
+async function viewCaseDetail(caseId) {
+  try {
+    const res = await fetch(`${API_BASE}/cases/${caseId}`);
+    const c = await res.json();
+    const metadata = c.metadata ? JSON.stringify(c.metadata, null, 2) : '{}';
+    const traceLink = c.source_trace_id
+      ? `<button class="btn btn-outline btn-sm" onclick="closeSlidePanel();setTimeout(()=>viewTraceDetail('${c.source_trace_id}'),350);">🔍 查看原始 Trace</button>`
+      : '';
+    openSlidePanel(`Case 详情: ${escapeHtml(c.query.substring(0, 50))}`, `
+      <p><strong>ID:</strong> <code>${c.id}</code></p>
+      <p><strong>来源:</strong> ${c.source} ${traceLink}</p>
+      <p><strong>难度:</strong> ${c.difficulty} | <strong>分类:</strong> ${c.category||'-'} | <strong>标签:</strong> ${(c.tags||[]).join(', ')}</p>
+      <p><strong>执行次数:</strong> ${c.run_count} | <strong>最近均分:</strong> <span class="${scoreClass(c.last_avg_score||0)}" style="font-weight:700;">${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</span></p>
+      <hr>
+      <p><strong>Gold Answer:</strong></p>
+      <pre>${escapeHtml(c.gold_answer || '-')}</pre>
+      <p style="margin-top:12px;"><strong>Metadata (Trace 快照):</strong></p>
+      <pre>${escapeHtml(metadata)}</pre>
+    `);
+  } catch(e) { showToast('加载详情失败', 'error'); }
+}
+
+async function evaluateCase(caseId) {
+  const btn = event.target;
+  const orig = btn.textContent;
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>';
+
+  try {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/evaluate`, { method: 'POST' });
+    const data = await res.json();
+    if (data.error) { showToast('❌ ' + data.error, 'error'); return; }
+
+    const layerNames = {intent:'意图',retrieval:'检索',tool:'工具',generation:'生成',outcome:'结果'};
+    const layersHtml = data.layers ? Object.entries(data.layers).map(([k,v]) => {
+      const dimsHtml = v.metrics ? Object.entries(v.metrics)
+        .filter(([dk]) => !dk.startsWith('_'))
+        .map(([dk, dv]) => {
+          if (typeof dv === 'object' && dv !== null && 'score' in dv) {
+            const dimClr = dv.score >= 80 ? 'score-high' : dv.score >= 50 ? 'score-mid' : 'score-low';
+            const skipped = dv.skipped ? ' ⏭️' : '';
+            const methodTag = dv.method ? ` <span class="badge badge-llm" style="font-size:10px;">${dv.method}</span>` : '';
+            return `<tr><td style="padding:2px 16px;font-size:12px;color:#6b7280;">↳ ${dk}${skipped}${methodTag}</td><td class="score-cell" style="font-size:13px;"><span class="${dimClr}">${dv.score.toFixed(1)}</span></td></tr>`;
+          }
+          return '';
+        }).join('') : '';
+      const lsc = v.total_score || 0;
+      const lClr = lsc >= 80 ? 'score-high' : lsc >= 50 ? 'score-mid' : 'score-low';
+      return `<tr><td style="font-weight:600;">${layerNames[k]||k}</td><td class="score-cell"><span class="${lClr}">${lsc.toFixed(1)}</span></td></tr>${dimsHtml}`;
+    }).join('') : '';
+
+    openSlidePanel('✅ 评分完成', `
+      <h4 style="margin-bottom:4px;">综合得分: <span class="${scoreClass(data.overall_score||0)}" style="font-size:28px;">${data.overall_score?.toFixed(1) || '-'}</span></h4>
+      <p style="color:var(--text-secondary);font-size:12px;margin-bottom:12px;">Trace: <code>${data.trace_id}</code></p>
+      ${layersHtml ? `<table style="width:100%;margin-top:8px;"><thead><tr><th style="text-align:left;">评测层</th><th style="text-align:left;">得分</th></tr></thead><tbody>${layersHtml}</tbody></table>` : ''}
+      <div style="margin-top:14px;text-align:right;">
+        <button class="btn btn-outline btn-sm" onclick="viewCaseScores('${caseId}')">📊 查看评分历史</button>
+      </div>
+    `);
+    loadCases(casePage);
+  } catch(e) {
+    showToast('❌ 评分失败: ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = orig;
+  }
+}
+
+async function viewCaseScores(caseId) {
+  try {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/scores`);
+    const data = await res.json();
+    const layerNames = {intent:'🎯 意图',retrieval:'📚 检索',tool:'🔧 工具',generation:'💬 生成',outcome:'🏁 结果'};
+    const layerColors = ['#4f46e5','#7c3aed','#d97706','#059669','#dc2626'];
+    const historyHtml = data.history && data.history.length ? data.history.map((run, i) => {
+      const runOverall = run.overall_score != null ? run.overall_score.toFixed(1) : '-';
+      const runClr = run.overall_score != null ? (run.overall_score >= 80 ? 'var(--success)' : run.overall_score >= 60 ? 'var(--warning)' : 'var(--danger)') : 'var(--text-secondary)';
+      const scoresDetail = run.scores ? run.scores.map(s => {
+        const layer = s.layer || 'unknown';
+        const layerLabel = layerNames[layer] || layer;
+        const scClr = s.score >= 80 ? 'var(--success)' : s.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+        const dims = s.metrics || {};
+        const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
+        const dimDetail = dimKeys.filter(dk => typeof dims[dk] === 'object' && dims[dk] !== null && 'score' in dims[dk])
+          .map(dk => {
+            const dv = dims[dk]; const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+            const skipped = dv.skipped ? ' ⏭️' : '';
+            const method = dv.method ? ` <span style="font-size:9px;color:var(--text-secondary);">[${dv.method}]</span>` : '';
+            return `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0;padding-left:16px;">↳ ${dk}${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b></div>`;
+          }).join('');
+        return `<div style="margin:4px 0;padding:6px 10px;background:#f9fafb;border-radius:4px;border-left:3px solid var(--primary);">
+          <span style="font-weight:600;">${layerLabel}</span>
+          <span style="font-weight:700;color:${scClr};margin-left:8px;">${s.score.toFixed(1)}</span>
+          <span class="badge badge-llm" style="font-size:10px;margin-left:6px;">${s.method||'-'}</span>
+          ${dimDetail}
+        </div>`;
+      }).join('') : '<span style="color:var(--text-secondary);">暂无评分</span>';
+      const borderColor = layerColors[i % layerColors.length];
+      return `<div style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-left:4px solid ${borderColor};border-radius:8px;">
+        <div style="font-weight:700;margin-bottom:8px;font-size:14px;color:${borderColor};">第 ${i+1} 次打分</div>
+        <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">${run.created_at ? new Date(run.created_at).toLocaleString('zh-CN') : ''} | 综合得分: <b style="color:${runClr};">${runOverall}</b></div>
+        ${scoresDetail}
+      </div>`;
+    }).join('') : '<p>暂无评分历史，请先执行评分</p>';
+
+    openSlidePanel(`📊 Case 评分历史: ${escapeHtml(data.query.substring(0, 40))}`, `
+      <p style="color:var(--text-secondary);font-size:13px;">最近均分: <b>${data.last_avg_score != null ? data.last_avg_score.toFixed(1) : '-'}</b> | 执行次数: <b>${data.run_count}</b></p>
+      <hr>
+      ${historyHtml}
+    `);
+  } catch(e) { showToast('加载评分历史失败', 'error'); }
+}
+
+async function loadCaseStats() {
+  try {
+    const res = await fetch(`${API_BASE}/cases?limit=1`);
+    const data = await res.json();
+    $('#stat-cases').textContent = data.total;
+  } catch(e) {}
+}
+
+function escapeHtml(str) {
+  const div = document.createElement('div');
+  div.textContent = str || '';
+  return div.innerHTML;
+}
+
+// ═══ 事件绑定 ═══
+$('#btn-search-traces').addEventListener('click', () => loadTraces(0));
+$('#btn-search-cases').addEventListener('click', () => loadCases(0));
+$('#trace-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadTraces(0); });
+$('#case-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadCases(0); });
+
+// ═══ 初始加载 ═══
+loadTraces();
+loadCaseStats();
+</script>
+
+</body>
+</html>

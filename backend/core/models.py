@@ -199,6 +199,7 @@ class EvalRun(Base):
         back_populates="eval_run",
         primaryjoin="foreign(EvalRun.trace_id) == Trace.id",
     )
+    eval_scores: Mapped[List["EvalScore"]] = relationship(back_populates="eval_run", cascade="all, delete-orphan")
 
     __table_args__ = (
         Index("idx_eval_runs_task", "task_id"),
@@ -311,6 +312,7 @@ class EvalScore(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
     trace_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("traces.id", ondelete="CASCADE"), nullable=False)
     span_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("spans.id", ondelete="CASCADE"))  # 可空：Outcome 层不绑定 span
+    eval_run_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("eval_runs.id", ondelete="CASCADE"))
 
     score: Mapped[float] = mapped_column(NUMERIC(5, 2), nullable=False)
     metrics: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
@@ -324,8 +326,10 @@ class EvalScore(Base):
 
     span: Mapped[Optional["Span"]] = relationship(back_populates="eval_scores")
     trace: Mapped["Trace"] = relationship(back_populates="eval_scores")
+    eval_run: Mapped[Optional["EvalRun"]] = relationship(back_populates="eval_scores")
 
     __table_args__ = (
         Index("idx_eval_scores_trace", "trace_id"),
         Index("idx_eval_scores_span", "span_id"),
+        Index("idx_eval_scores_run", "eval_run_id"),
     )

@@ -17,17 +17,25 @@
             )
         )
     )
+
+Span 类型映射（三层策略）：
+  1. 优先：span.attributes["eval.span_type"] 显式标注
+  2. 次选：span.name.lower() 对内置映射表做包含匹配（最长匹配优先）
+  3. 兜底：返回 span.name 原值
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import time
 from collections import defaultdict
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Sequence
 
 from agent_eval_sdk.reporter import TraceReporter
 
+logger = logging.getLogger(__name__)
 
 # ── OTel 依赖延迟导入（作为可选依赖）─────────────────────────────────────
 _otel_import_error: Optional[ImportError] = None
@@ -41,6 +49,46 @@ except ImportError as e:
     ReadableSpan = None
     StatusCode = None
     _otel_import_error = e
+
+
+# ── span_type 枚举与映射表 ───────────────────────────────────────────────
+
+_VALID_SPAN_TYPES = {"intent", "retrieval", "tool_call", "generation", "outcome"}
+
+# 硬编码 fallback 规则（不依赖 YAML 时使用）
+_FALLBACK_RULES: Dict[str, str] = {
+    # LangChain / LangGraph
+    "chatopenai": "generation",
+    "chat": "generation",
+    "llm": "generation",
+    "openai.chat": "generation",
+    "retriever": "retrieval",
+    "retriev": "retrieval",
+    "similarity_search": "retrieval",
+    "vectorstore": "retrieval",
+    "tool": "tool_call",
+    "agentexecutor": "outcome",
+    "agent": "outcome",
+    "chain.invoke": "generation",
+    "chain": "generation",
+    # LlamaIndex
+    "llm_predict": "generation",
+    "complete": "generation",
+    "query_engine": "outcome",
+    "query": "retrieval",
+    "retrieve": "retrieval",
+    "node_parser": "retrieval",
+    # OpenAI Agents SDK
+    "openai_agent": "outcome",
+    "agent_runner": "outcome",
+    "function_call": "tool_call",
+    "tool_call": "tool_call",
+    "model_response": "generation",
+}
+
+_DEFAULT_RULES_PATH = Path(__file__).parent / "span_type_mapping.yaml"
+_DEFAULT_RULES: Optional[Dict[str, str]] = None
+
 
 
 class EvalSpanExporter(SpanExporter):
@@ -58,7 +106,9 @@ class EvalSpanExporter(SpanExporter):
     │ attributes["tool_*"] │ tool_name/params/result│
     └──────────────────────┴──────────────────────┘
 
-    Span 按 trace_id 分组，识别根 Span 自动生成 trace_start / trace_finish 事件。
+    子 Span 到达时先缓存，根 Span（parent is None）到达时统一输出：
+    trace_start → 所有 span × N → trace_finish
+    兼容 SimpleSpanProcessor（逐 Span 导出）和 BatchSpanProcessor（批量导出）。
     """
 
     def __init__(
@@ -68,7 +118,18 @@ class EvalSpanExporter(SpanExporter):
         redis_key_prefix: str = "eval:events:",
         source: str = "production",
         run_id: Optional[str] = None,
+        span_type_rules: Optional[Dict[str, str]] = None,
     ):
+        """
+        Args:
+            redis_url: Redis 连接地址
+            agent_version: Agent 版本号
+            redis_key_prefix: Redis Key 前缀
+            source: 上报来源（'eval' | 'production'）
+            run_id: 评测运行 ID（评测场景传入）
+            span_type_rules: 自定义 span_type 映射表 {pattern: span_type}，
+                             与内置映射表合并，自定义规则优先级更高
+        """
         if _otel_import_error is not None:
             raise ImportError(
                 "使用 EvalSpanExporter 需要安装 OpenTelemetry SDK：\n"
@@ -78,6 +139,7 @@ class EvalSpanExporter(SpanExporter):
         self._agent_version = agent_version
         self._source = source
         self._run_id = run_id
+        self._span_type_rules = span_type_rules
         self._reporter = TraceReporter(
             agent_version=agent_version,
             redis_url=redis_url,
@@ -85,73 +147,69 @@ class EvalSpanExporter(SpanExporter):
         )
         self._redis = self._reporter._redis
         self._span_key = self._reporter._span_key
+        # 缓存未完成的 trace：{trace_id: {"root": None, "spans": []}}
+        self._pending: Dict[str, Dict[str, Any]] = defaultdict(
+            lambda: {"root": None, "spans": []}
+        )
 
     def export(self, spans: Sequence[ReadableSpan]) -> "SpanExportResult":
         """导出一批已结束的 OTel Span 到 Redis。
 
-        按 trace_id 分组，每个 trace 组按顺序写入：
-        1. trace_start（含 query、context 等元信息）
-        2. span × N（每个 Span 一个事件，按 start_time 排序）
-        3. trace_finish（含 status）
+        子 Span（parent is not None）→ 缓存到 _pending
+        根 Span（parent is None）→ 将缓存的所有子 Span + 根 Span 一次性输出：
+          trace_start → span × N → trace_finish
         """
-        # ── 按 trace_id 分组 ──────────────────────────────────────────
-        groups: Dict[str, Dict[str, Any]] = defaultdict(
-            lambda: {"root": None, "spans": []}
-        )
-
         for span in spans:
             tid = _format_trace_id(span.context.trace_id)
-            groups[tid]["spans"].append(span)
-            if span.parent is None:
-                groups[tid]["root"] = span
+            is_root = span.parent is None
 
-        # ── 逐组写入 Redis ────────────────────────────────────────────
-        for tid, group in groups.items():
-            root: Optional[ReadableSpan] = group["root"]
-            all_spans: List[ReadableSpan] = group["spans"]
+            if is_root:
+                # 根 Span 到达 → 写入完整 trace
+                group = self._pending.pop(tid, {"root": None, "spans": []})
+                all_spans: List[ReadableSpan] = list(group["spans"])
+                all_spans.append(span)
+                all_spans.sort(key=lambda s: s.start_time)
 
-            # 按 start_time 排序，保证 sequence 一致
-            all_spans.sort(key=lambda s: s.start_time)
+                attrs = _safe_attrs(span)
 
-            # 1) trace_start — 从根 Span 属性提取元信息
-            attrs = _safe_attrs(root) if root else {}
+                def _parse(key: str, default: Any = None) -> Any:
+                    val = attrs.get(key, default)
+                    if isinstance(val, str) and val.strip().startswith(("{", "[")):
+                        try:
+                            return json.loads(val)
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                    return val
 
-            def _parse(key: str, default: Any = None) -> Any:
-                """从 OTel 属性中提取值，自动 JSON 解析字符串。"""
-                val = attrs.get(key, default)
-                if isinstance(val, str) and val.strip().startswith(("{", "[")):
-                    try:
-                        return json.loads(val)
-                    except (json.JSONDecodeError, TypeError):
-                        pass
-                return val
+                # trace_start
+                self._push({
+                    "type": "trace_start",
+                    "trace_id": tid,
+                    "agent_version": attrs.get("agent_version", self._agent_version),
+                    "query": attrs.get("query", span.name),
+                    "context": _parse("context", {}),
+                    "source": attrs.get("source", self._source),
+                    "run_id": attrs.get("run_id", self._run_id),
+                    "source_ref": attrs.get("source_ref"),
+                    "session_id": attrs.get("session_id"),
+                    "timestamp": time.time(),
+                })
 
-            self._push({
-                "type": "trace_start",
-                "trace_id": tid,
-                "agent_version": attrs.get("agent_version", self._agent_version),
-                "query": attrs.get("query", root.name if root else ""),
-                "context": _parse("context", {}),
-                "source": attrs.get("source", self._source),
-                "run_id": attrs.get("run_id", self._run_id),
-                "source_ref": attrs.get("source_ref"),
-                "session_id": attrs.get("session_id"),
-                "timestamp": time.time(),
-            })
+                # span × N
+                for seq, s in enumerate(all_spans, start=1):
+                    self._push(_span_to_event(s, seq, self._span_type_rules))
 
-            # 2) span × N
-            for seq, span in enumerate(all_spans, start=1):
-                self._push(_span_to_event(span, seq))
-
-            # 3) trace_finish — 从根 Span 状态推断
-            final_status = _map_status(root) if root else "success"
-            self._push({
-                "type": "trace_finish",
-                "trace_id": tid,
-                "final_response": attrs.get("final_response"),
-                "status": final_status,
-                "timestamp": time.time(),
-            })
+                # trace_finish
+                self._push({
+                    "type": "trace_finish",
+                    "trace_id": tid,
+                    "final_response": attrs.get("final_response"),
+                    "status": _map_status(span),
+                    "timestamp": time.time(),
+                })
+            else:
+                # 子 Span → 缓存，等根 Span 到达后统一输出
+                self._pending[tid]["spans"].append(span)
 
         return SpanExportResult.SUCCESS
 
@@ -191,8 +249,14 @@ def _map_status(root_span: Optional[ReadableSpan]) -> str:
     return "success"
 
 
-def _span_to_event(span: ReadableSpan, sequence: int) -> dict:
+def _span_to_event(span: ReadableSpan, sequence: int,
+                   custom_rules: Optional[Dict[str, str]] = None) -> dict:
     """将单个 OTel ReadableSpan 转为 eval span 事件字典。
+
+    span_type 通过三层策略推导：
+      1. span.attributes["eval.span_type"] 显式标注
+      2. span.name.lower() 对映射表做包含匹配
+      3. 兜底返回 span.name
 
     OTel 属性仅支持原始类型（str/int/float/bool），对于 dict/list 类型的属性，
     上游应以 JSON 字符串形式设置，Exporter 会自动反序列化。
@@ -223,7 +287,7 @@ def _span_to_event(span: ReadableSpan, sequence: int) -> dict:
     return {
         "type": "span",
         "trace_id": _format_trace_id(span.context.trace_id),
-        "span_type": span.name,
+        "span_type": _resolve_span_type(span, custom_rules),
         "sequence": sequence,
         "input": _parse_attr("input"),
         "output": _parse_attr("output"),
@@ -236,3 +300,96 @@ def _span_to_event(span: ReadableSpan, sequence: int) -> dict:
         "tool_status": tool_status,
         "timestamp": time.time(),
     }
+
+
+# ── Span 类型映射 ────────────────────────────────────────────────────────
+
+def _load_default_rules() -> Dict[str, str]:
+    """加载内置映射表（惰性初始化，避免导入时 I/O）。
+
+    优先从 YAML 文件加载，失败时使用硬编码 fallback。
+    """
+    global _DEFAULT_RULES
+    if _DEFAULT_RULES is not None:
+        return _DEFAULT_RULES
+
+    try:
+        import yaml
+        with open(_DEFAULT_RULES_PATH, "r", encoding="utf-8") as f:
+            _DEFAULT_RULES = yaml.safe_load(f) or {}
+        logger.debug("已加载 span_type 映射文件: %s", _DEFAULT_RULES_PATH)
+    except Exception:
+        _DEFAULT_RULES = dict(_FALLBACK_RULES)
+        logger.debug("映射文件不可用，使用硬编码 fallback 规则 (%d 条)", len(_DEFAULT_RULES))
+    return _DEFAULT_RULES
+
+
+def _build_rules(custom_rules: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    """构建最终映射表：内置规则 + 自定义规则（自定义覆盖内置）。
+
+    Args:
+        custom_rules: 用户自定义映射 {pattern: span_type}
+
+    Returns:
+        合并后的映射表，所有 key 已转为小写
+    """
+    rules = dict(_load_default_rules())
+    if custom_rules:
+        # 自定义规则 key 也转为小写以保证匹配一致性
+        rules.update({k.lower(): v for k, v in custom_rules.items()})
+    return rules
+
+
+def _resolve_span_type(
+    span: "ReadableSpan",
+    custom_rules: Optional[Dict[str, str]] = None,
+) -> str:
+    """三层策略推导 span_type。
+
+    优先级：
+      1. span.attributes["eval.span_type"] 显式标注（存在且合法）
+      2. span.name.lower() 对映射表做包含匹配（最长匹配优先）
+      3. 兜底返回 span.name
+
+    Args:
+        span: OTel ReadableSpan
+        custom_rules: 用户自定义映射规则，与内置规则合并
+
+    Returns:
+        推导出的 span_type 字符串
+    """
+    attrs = dict(span.attributes) if span.attributes else {}
+
+    # ── 第 1 层：显式标注优先 ──────────────────────────────────────────
+    explicit = attrs.get("eval.span_type")
+    if explicit is not None and isinstance(explicit, str):
+        explicit_lower = explicit.strip().lower()
+        # "tool" 是 "tool_call" 的别名
+        if explicit_lower == "tool":
+            explicit_lower = "tool_call"
+        if explicit_lower in _VALID_SPAN_TYPES:
+            return explicit_lower
+        logger.warning(
+            "非法的 eval.span_type 值 '%s'（合法值: %s），降级到模式匹配",
+            explicit, sorted(_VALID_SPAN_TYPES),
+        )
+
+    # ── 第 2 层：模式匹配 ──────────────────────────────────────────────
+    name_lower = span.name.lower().strip()
+    rules = _build_rules(custom_rules)
+
+    # 收集所有匹配的规则，取 pattern 最长者
+    best_match: Optional[str] = None
+    best_len = 0
+    for pattern, target in rules.items():
+        if pattern in name_lower:
+            if len(pattern) > best_len:
+                best_match = target
+                best_len = len(pattern)
+
+    if best_match is not None:
+        return best_match
+
+    # ── 第 3 层：兜底 ──────────────────────────────────────────────────
+    logger.debug("span_type 无匹配规则，兜底返回 span.name: '%s'", span.name)
+    return span.name

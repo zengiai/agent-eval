@@ -44,4 +44,7 @@ AGENTS.md
 
 .env
 
+# Logs
+/logs/
+
 docker-compose.yml

@@ -124,7 +124,6 @@ class OutcomeEvaluator(BaseEvaluator):
         errors = [
             s for s in tool_spans
             if s.get("tool_status") not in (None, "success", "")
-            and (s.get("tool_result") or {}).get("status") not in (None, "success", "")
         ]
 
         if not errors:
