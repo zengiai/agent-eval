@@ -20,8 +20,8 @@ import yaml
 logger = logging.getLogger(__name__)
 
 # ── 默认 LLM Judge 配置 ─────────────────────────────────────────
-DEFAULT_MODEL = "gpt-4o"
-DEFAULT_BASE_URL = "https://api.openai.com/v1"
+DEFAULT_MODEL = "qwen3.7-max"
+DEFAULT_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_RETRIES = 3
 DEFAULT_TIMEOUT = 60.0

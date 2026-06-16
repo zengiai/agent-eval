@@ -8,7 +8,7 @@
         config_file="eval_config.yaml",
         enabled_layers=["intent", "generation", "outcome"],
         sampling_rate=0.05,
-        llm={"model": "gpt-4o", "api_key": "sk-xxx"},
+        llm={"model": "qwen3.7-max", "api_key": "sk-xxx"},
     )
     await eval_service.mount()
 
@@ -66,7 +66,7 @@ class EvalService:
         self.sampling_rate = sampling_rate
         self.sampling_daily_limit = sampling_daily_limit
         self._llm = llm or {
-            "model": "gpt-4o",
+            "model": "qwen3.7-max",
             "api_key": settings.LLM_API_KEY,
             "base_url": settings.LLM_BASE_URL,
             "temperature": settings.LLM_TEMPERATURE,

@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Eval Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <style>
   :root {
     --bg: #f5f7fa;
@@ -86,7 +87,7 @@
   .slide-tab { padding: 10px 18px; border: none; background: none; font-size: 13px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; transition: all .2s; }
   .slide-tab:hover { color: var(--text); }
   .slide-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
-  .slide-body { flex: 1; overflow-y: auto; padding: 20px; }
+  .slide-body { flex: 1; overflow: auto; padding: 20px; }
   .slide-body pre { background: #f9fafb; border-radius: 6px; padding: 12px; overflow-x: auto; font-size: 13px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; max-height: 300px; }
   .slide-body hr { margin: 14px 0; border: none; border-top: 1px solid var(--border); }
 
@@ -99,6 +100,81 @@
   .empty-state .icon { font-size: 48px; margin-bottom: 12px; }
   .spinner { display: inline-block; width: 16px; height: 16px; border: 2px solid #e5e7eb; border-top-color: var(--primary); border-radius: 50%; animation: spin .6s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+
+  /* ═══ 概览统计卡片 ═══ */
+  .overview-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 14px; margin-bottom: 18px; }
+  .stat-card { background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; display: flex; flex-direction: column; gap: 6px; }
+  .stat-card .stat-icon { font-size: 24px; line-height: 1; }
+  .stat-card .stat-label { font-size: 11px; text-transform: uppercase; letter-spacing: .5px; color: var(--text-secondary); font-weight: 600; }
+  .stat-card .stat-value { font-size: 22px; font-weight: 700; color: var(--text); }
+  .stat-card .stat-sub { font-size: 11px; color: var(--text-secondary); }
+  .score-gauge { height: 6px; border-radius: 4px; background: #e5e7eb; margin-top: 4px; overflow: hidden; }
+  .score-gauge-fill { height: 100%; border-radius: 4px; transition: width .3s; }
+  .score-gauge-fill.high { background: var(--success); }
+  .score-gauge-fill.mid { background: var(--warning); }
+  .score-gauge-fill.low { background: var(--danger); }
+
+  /* ═══ Span 分布条 ═══ */
+  .distro-bar { display: flex; height: 24px; border-radius: 6px; overflow: hidden; margin-top: 8px; }
+  .distro-seg { display: flex; align-items: center; justify-content: center; font-size: 10px; font-weight: 700; color: #fff; min-width: 32px; transition: flex .3s; }
+  .distro-seg.intent { background: #6366f1; }
+  .distro-seg.retrieval { background: #8b5cf6; }
+  .distro-seg.tool_call { background: #f59e0b; }
+  .distro-seg.generation { background: #10b981; }
+  .distro-seg.outcome { background: #ef4444; }
+
+  /* ═══ Span 链路图 ═══ */
+  .span-chain-wrapper { padding: 8px 0 20px; overflow: visible; }
+  .span-chain { display: flex; align-items: flex-start; gap: 0; min-width: max-content; padding: 0 8px; }
+  .span-node { position: relative; display: flex; flex-direction: column; align-items: center; flex-shrink: 0; cursor: pointer; }
+  .span-node-box { width: 100px; padding: 12px 8px; border: 2px solid var(--border); border-radius: 12px; background: var(--card-bg); text-align: center; transition: all .2s; }
+  .span-node-box:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(79,70,229,.15); transform: translateY(-2px); }
+  .span-node-box .node-seq { font-size: 10px; font-weight: 600; color: var(--text-secondary); margin-bottom: 2px; }
+  .span-node-box .node-icon { font-size: 18px; line-height: 1; margin-bottom: 2px; }
+  .span-node-box .node-type { font-size: 11px; font-weight: 700; color: var(--text); }
+  .span-node-box .node-time { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
+  .span-arrow { display: flex; align-items: center; flex-shrink: 0; padding: 0 2px; margin-top: 38px; }
+  .span-arrow svg { width: 28px; height: 16px; }
+  .span-arrow line { stroke: #cbd5e1; stroke-width: 2; }
+  .span-arrow polyline { fill: none; stroke: #cbd5e1; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+
+  /* ═══ Span 详情 Popover ═══ */
+  .span-popover { display: none; position: fixed; z-index: 2000; width: 340px; max-height: 420px; overflow-y: auto; background: var(--card-bg); border: 1px solid var(--border); border-radius: var(--radius); box-shadow: 0 10px 40px rgba(0,0,0,.2); padding: 14px; font-size: 12px; pointer-events: auto; }
+  .span-popover .pop-section { margin-bottom: 8px; }
+  .span-popover .pop-section:last-child { margin-bottom: 0; }
+  .span-popover .pop-title { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-secondary); margin-bottom: 3px; }
+  .span-popover .pop-value { font-size: 12px; color: var(--text); word-break: break-all; }
+  .span-popover pre { background: #f9fafb; border-radius: 4px; padding: 6px 8px; font-size: 11px; max-height: 100px; overflow-y: auto; margin: 0; white-space: pre-wrap; word-break: break-all; }
+  .span-popover .dim-badge { display: inline-block; margin: 1px 4px 1px 0; padding: 1px 6px; border-radius: 3px; font-size: 10px; font-weight: 600; }
+
+  /* ═══ Final Response 区域 ═══ */
+  .fr-section { margin-top: 14px; }
+  .fr-toolbar { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+  .fr-toolbar .fr-label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-secondary); margin-right: auto; }
+  .fr-toggle { padding: 3px 12px; border: 1px solid var(--border); border-radius: 4px; background: var(--card-bg); font-size: 11px; font-weight: 600; color: var(--text-secondary); cursor: pointer; transition: all .15s; }
+  .fr-toggle:hover { border-color: var(--primary); color: var(--primary); }
+  .fr-toggle.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+  .fr-raw { display: block; }
+  .fr-raw.hidden { display: none; }
+  .fr-preview { display: none; background: #f9fafb; border-radius: 6px; padding: 14px 16px; font-size: 13px; line-height: 1.7; max-height: 400px; overflow-y: auto; }
+  .fr-preview.visible { display: block; }
+  .fr-preview h1, .fr-preview h2, .fr-preview h3 { margin: 12px 0 6px; line-height: 1.3; }
+  .fr-preview h1 { font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 4px; }
+  .fr-preview h2 { font-size: 15px; }
+  .fr-preview h3 { font-size: 13px; }
+  .fr-preview p { margin: 4px 0 8px; }
+  .fr-preview ul, .fr-preview ol { padding-left: 20px; margin: 4px 0 8px; }
+  .fr-preview li { margin: 2px 0; }
+  .fr-preview code { background: #e5e7eb; padding: 1px 5px; border-radius: 3px; font-size: 12px; }
+  .fr-preview pre { background: #1e293b; color: #e2e8f0; padding: 12px; border-radius: 6px; font-size: 12px; overflow-x: auto; margin: 8px 0; }
+  .fr-preview pre code { background: none; padding: 0; color: inherit; }
+  .fr-preview blockquote { border-left: 3px solid var(--primary); padding-left: 12px; margin: 8px 0; color: var(--text-secondary); }
+  .fr-preview table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 12px; }
+  .fr-preview th, .fr-preview td { border: 1px solid var(--border); padding: 6px 10px; text-align: left; }
+  .fr-preview th { background: #f9fafb; font-weight: 600; }
+  .fr-preview a { color: var(--primary); }
+  .fr-preview img { max-width: 100%; }
+  .fr-preview strong { font-weight: 700; }
 </style>
 </head>
 <body>
@@ -190,6 +266,9 @@
   <div class="slide-body" id="slide-body"></div>
 </div>
 
+<!-- 全局 Popover（body 级别，脱离 slide-panel 的 transform containing block） -->
+<div class="span-popover" id="span-popover-global"></div>
+
 <script>
 const API_BASE = '/api';
 
@@ -216,6 +295,90 @@ function caseSourceBadge(s) {
 }
 function statusBadge(s) {
   return s === 'success' ? `<span class="badge badge-success">${s}</span>` : `<span class="badge badge-error">${s}</span>`;
+}
+
+// ── 层特定关键指标提取 ──
+// 根据不同评测层提取最有价值的上下文信息，帮助用户快速定位改进方向
+function layerSpecificDetails(layer, dims) {
+  if (!layer || !dims) return '';
+  const skipped = dims._skipped || [];
+  const parts = [];
+  const kv = (label, val, clr) => `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 7px;background:#eef2ff;border-radius:4px;font-size:11px;white-space:nowrap;"><span style="color:var(--text-secondary);">${label}</span><b style="color:${clr||'var(--text)'};">${val}</b></span>`;
+  const info = (html) => `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 7px;background:#f0fdf4;border-radius:4px;font-size:11px;white-space:nowrap;">${html}</span>`;
+  const warn = (html) => `<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 7px;background:#fef3c7;border-radius:4px;font-size:11px;white-space:nowrap;">${html}</span>`;
+
+  if (layer === 'intent') {
+    const cc = dims.ConfidenceCalibration;
+    if (cc && !cc.skipped && cc.confidence != null) parts.push(kv('置信度', cc.confidence));
+  }
+
+  if (layer === 'retrieval') {
+    const div = dims.Diversity;
+    if (div && !div.skipped && div.note) parts.push(info(`<span style="color:var(--text-secondary);">Diversity</span> <span style="color:var(--warning);">${div.note}</span>`));
+  }
+
+  if (layer === 'tool_call' || layer === 'tool') {
+    const eff = dims.Efficiency;
+    if (eff && !eff.skipped) parts.push(kv('工具调用', `${eff.actual_count ?? '-'} / ${eff.expected_count ?? '-'}`));
+    const sr = dims.SuccessRate;
+    if (sr && !sr.skipped) parts.push(kv('成功率', `${sr.success}/${sr.total}`, sr.score >= 100 ? 'var(--success)' : 'var(--warning)'));
+  }
+
+  if (layer === 'generation') {
+    const fa = dims.FactualAccuracy;
+    if (fa && !fa.skipped) {
+      const llmS = fa.llm_score != null ? fa.llm_score : '-';
+      parts.push(kv('LLM评分', `${llmS}/5`, fa.score >= 80 ? 'var(--success)' : fa.score >= 60 ? 'var(--warning)' : 'var(--danger)'));
+    }
+    const hl = dims.HallucinationScore;
+    if (hl && !hl.skipped) {
+      const hClr = hl.hallucination_count === 0 ? 'var(--success)' : 'var(--danger)';
+      parts.push(kv('幻觉', `${hl.hallucination_count ?? '-'}/${hl.total_sentences ?? '-'}句`, hClr));
+      if (hl.overall_severity && hl.overall_severity !== 'none')
+        parts.push(warn(`严重度: <b style="color:var(--danger);">${hl.overall_severity}</b>`));
+    }
+    const ss = dims.SemanticSimilarity;
+    if (ss && !ss.skipped) parts.push(kv('语义相似度', `${ss.score.toFixed(0)}%`, ss.score >= 80 ? 'var(--success)' : 'var(--warning)'));
+    const cp = dims.Completeness;
+    if (cp && cp.details && cp.details.length) {
+      const covered = cp.details.filter(d => d.coverage === 'fully_covered').length;
+      const partial = cp.details.filter(d => d.coverage === 'partially_covered').length;
+      const notCov = cp.details.filter(d => d.coverage === 'not_covered').length;
+      let cpHtml = `覆盖: <b style="color:var(--success);">${covered}全</b>`;
+      if (partial) cpHtml += ` <b style="color:var(--warning);">${partial}部分</b>`;
+      if (notCov) cpHtml += ` <b style="color:var(--danger);">${notCov}缺失</b>`;
+      parts.push(info(cpHtml));
+    }
+    const ann = dims._annotation_source;
+    if (ann) {
+      if (ann.gold_answer?.method === 'llm_auto_generated')
+        parts.push(info(`标注: <b style="color:#9d174d;">LLM生成</b> (置信${((ann.gold_answer.confidence||0)*100).toFixed(0)}%)`));
+      else if (ann.gold_answer?.method === 'llm_generation_failed')
+        parts.push(warn('标注: <b style="color:var(--danger);">生成失败</b>'));
+    }
+  }
+
+  if (layer === 'outcome' || (!layer && !skipped.length && dims.LatencyScore)) {
+    const lat = dims.LatencyScore;
+    if (lat) {
+      const lClr = lat.total_latency_ms < 2000 ? 'var(--success)' : lat.total_latency_ms < 5000 ? 'var(--warning)' : 'var(--danger)';
+      parts.push(kv('总延迟', lat.total_latency_ms < 1000 ? `${lat.total_latency_ms}ms` : `${(lat.total_latency_ms/1000).toFixed(1)}s`, lClr));
+    }
+    const tc = dims.TaskCompletion;
+    if (tc && !tc.skipped) parts.push(kv('任务完成', `${tc.score.toFixed(0)}`, tc.score >= 80 ? 'var(--success)' : 'var(--warning)'));
+    const te = dims.TokenEfficiency;
+    if (te && !te.skipped && te.total_tokens) parts.push(kv('Token', te.total_tokens));
+    const se = dims.SatisfactionEstimate;
+    if (se && !se.skipped && se.penalty > 0) parts.push(warn(`满意度惩罚: <b>${se.penalty}</b>`));
+  }
+
+  if (skipped.length > 0) {
+    parts.push(`<span style="display:inline-flex;align-items:center;gap:2px;padding:2px 7px;background:#f3f4f6;border-radius:4px;font-size:11px;color:var(--text-secondary);white-space:nowrap;">⏭️ ${skipped.length}维跳过</span>`);
+  }
+
+  return parts.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:4px;margin-top:6px;">${parts.join('')}</div>`
+    : '';
 }
 
 // ═══ 侧滑抽屉 ═══
@@ -320,6 +483,33 @@ function renderTraces(data) {
     <button class="btn btn-outline btn-sm" onclick="loadTraces(${tracePage+1})" ${(tracePage+1)*20>=data.total?'disabled':''}>下一页</button>`;
 }
 
+// ── 辅助：格式化 token dict → 可读字符串 ──
+function fmtTokens(tk) {
+  if (!tk || typeof tk !== 'object') return '-';
+  const parts = [];
+  if (tk.input_tokens != null) parts.push('in:' + tk.input_tokens);
+  else if (tk.prompt_tokens != null) parts.push('in:' + tk.prompt_tokens);
+  if (tk.output_tokens != null) parts.push('out:' + tk.output_tokens);
+  else if (tk.completion_tokens != null) parts.push('out:' + tk.completion_tokens);
+  if (tk.total_tokens != null) parts.push('total:' + tk.total_tokens);
+  return parts.length ? parts.join(' ') : JSON.stringify(tk);
+}
+
+// ── 辅助：格式化延迟 ──
+function fmtLatency(ms) {
+  if (ms == null) return '-';
+  if (ms < 1000) return ms + 'ms';
+  return (ms / 1000).toFixed(2) + 's';
+}
+
+// ── 辅助：延迟颜色 ──
+function latencyColor(ms) {
+  if (ms == null) return 'var(--text-secondary)';
+  if (ms < 500) return 'var(--success)';
+  if (ms < 2000) return 'var(--warning)';
+  return 'var(--danger)';
+}
+
 async function viewTraceDetail(traceId) {
   openSlidePanel('Trace 详情', '<div style="text-align:center;padding:40px;"><span class="spinner"></span> 加载中…</div>');
   try {
@@ -330,63 +520,142 @@ async function viewTraceDetail(traceId) {
     const spans = data.spans || [];
     const scores = data.eval_scores || [];
 
+    // ── 概览 HTML：统计卡片布局 ──
+    const oscore = t.overall_score;
+    const scoreClr = oscore != null ? (oscore >= 80 ? 'high' : oscore >= 60 ? 'mid' : 'low') : '';
+    const scorePct = oscore != null ? Math.min(100, Math.max(0, oscore)) : 0;
+
     const overviewHtml = `
-      <p><strong>Query:</strong> ${escapeHtml(t.query || '-')}</p>
-      <p><strong>状态:</strong> ${statusBadge(t.status)} &nbsp; <strong>来源:</strong> ${sourceBadge(t.source)}</p>
-      <p><strong>综合得分:</strong> <span class="${scoreClass(t.overall_score||0)}" style="font-size:20px;font-weight:700;">${t.overall_score != null ? t.overall_score.toFixed(1) : '-'}</span></p>
-      <p><strong>总耗时:</strong> ${t.total_latency_ms != null ? (t.total_latency_ms/1000).toFixed(2)+'s' : '-'} &nbsp;|&nbsp; <strong>总Token:</strong> ${t.total_tokens || '-'}</p>
-      <p><strong>Span 数量:</strong> ${t.span_count} &nbsp;|&nbsp; <strong>时间:</strong> ${formatDate(t.created_at)}</p>
-      ${t.span_distribution ? `
-        <hr>
-        <p><strong>Span 分布:</strong></p>
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:6px;">${Object.entries(t.span_distribution).map(([type, count]) =>
-          `<span class="badge badge-eval">${type}: ${count}</span>`
-        ).join('')}</div>
-      ` : ''}
-      ${t.final_response ? `<hr><p><strong>Final Response:</strong></p><pre>${escapeHtml(t.final_response)}</pre>` : ''}
+      <div style="margin-bottom:10px;font-size:13px;color:var(--text-secondary);">
+        <strong style="color:var(--text);">Query:</strong> ${escapeHtml(t.query || '-')}
+      </div>
+      <div class="overview-grid">
+        <div class="stat-card">
+          <div class="stat-icon">📊</div>
+          <div class="stat-label">综合得分</div>
+          <div class="stat-value" style="color:${oscore != null ? (oscore >= 80 ? 'var(--success)' : oscore >= 60 ? 'var(--warning)' : 'var(--danger)') : 'var(--text-secondary)'};">${oscore != null ? oscore.toFixed(1) : '-'}</div>
+          <div class="score-gauge"><div class="score-gauge-fill ${scoreClr}" style="width:${scorePct}%;"></div></div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">⏱️</div>
+          <div class="stat-label">总耗时</div>
+          <div class="stat-value">${fmtLatency(t.total_latency_ms)}</div>
+          <div class="stat-sub">${t.status ? statusBadge(t.status) : ''} &nbsp; ${t.source ? sourceBadge(t.source) : ''}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🪙</div>
+          <div class="stat-label">总 Token</div>
+          <div class="stat-value" style="font-size:16px;">${fmtTokens(t.total_tokens)}</div>
+          <div class="stat-sub">${t.created_at ? formatDate(t.created_at) : '-'}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-icon">🔗</div>
+          <div class="stat-label">Span 数量</div>
+          <div class="stat-value">${t.span_count}</div>
+          ${t.span_distribution ? '<div class="distro-bar">' + Object.entries(t.span_distribution).map(([type, count]) =>
+            `<div class="distro-seg ${type}" style="flex:${count};">${count}</div>`
+          ).join('') + '</div>' : ''}
+        </div>
+      </div>
+      ${t.final_response ? `
+      <div class="fr-section">
+        <div class="fr-toolbar">
+          <span class="fr-label">Final Response</span>
+          <button class="fr-toggle active" onclick="switchFRMode(this, 'raw')">Raw</button>
+          <button class="fr-toggle" onclick="switchFRMode(this, 'preview')">Preview</button>
+        </div>
+        <pre class="fr-raw" id="fr-raw">${escapeHtml(t.final_response)}</pre>
+        <div class="fr-preview" id="fr-preview"></div>
+      </div>` : ''}
     `;
 
-    // 构建 span_id → eval_score 映射，用于在下文 Spans 卡片中内嵌各维度打分
+    // ── 构建 span_id → eval_score 映射 ──
     const spanScoreMap = {};
     const orphanScores = [];
     for (const sc of scores) {
       if (sc.span_id) { spanScoreMap[sc.span_id] = sc; }
       else { orphanScores.push(sc); }
     }
-    const layerNames = {intent:'🎯 意图', retrieval:'📚 检索', tool_call:'🔧 工具', generation:'💬 生成', outcome:'🏁 结果'};
+    const layerIcons = {intent:'🎯', retrieval:'📚', tool_call:'🔧', generation:'💬', outcome:'🏁'};
+    const layerNames = {intent:'意图', retrieval:'检索', tool_call:'工具', generation:'生成', outcome:'结果'};
 
-    const spansHtml = spans.length ? spans.map(sp => {
+    // ── Span 链路图 HTML ──
+    _popoverStore.clear(); // 每次打开新详情时清空旧缓存
+
+    const buildSpanNode = (sp, idx) => {
+      const icon = layerIcons[sp.span_type] || '📄';
+      const lname = layerNames[sp.span_type] || sp.span_type;
       const escore = spanScoreMap[sp.id];
-      let dimBadges = '';
-      let scoreDisplay = '';
-      if (escore && escore.metrics) {
-        const dims = escore.metrics;
-        const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
-        dimBadges = dimKeys.filter(dk => typeof dims[dk] === 'object' && dims[dk] !== null && 'score' in dims[dk])
-          .map(dk => {
-            const dv = dims[dk];
-            const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
-            const skipped = dv.skipped ? ' ⏭️' : '';
-            return '<span style="display:inline-block;margin:2px 8px 2px 0;font-size:11px;color:var(--text-secondary);">' + dk + skipped + ': <b style="color:' + dClr + ';">' + dv.score.toFixed(1) + '</b></span>';
-          }).join('');
+
+      // Popover 详细内容
+      let popoverHtml = '';
+      popoverHtml += '<div class="pop-section"><div class="pop-title">基本信息</div>';
+      popoverHtml += '<div class="pop-value">序列: <b>#' + sp.sequence + '</b> &nbsp;|&nbsp; 类型: <b>' + lname + '</b></div></div>';
+
+      popoverHtml += '<div class="pop-section"><div class="pop-title">性能指标</div>';
+      popoverHtml += '<div class="pop-value">耗时: <b style="color:' + latencyColor(sp.latency_ms) + ';">' + fmtLatency(sp.latency_ms) + '</b></div>';
+      popoverHtml += '<div class="pop-value">Token: <b>' + fmtTokens(sp.tokens) + '</b></div>';
+      if (sp.model) popoverHtml += '<div class="pop-value">Model: <b>' + escapeHtml(sp.model) + '</b></div>';
+      popoverHtml += '</div>';
+
+      if (escore) {
         const scClr = escore.score >= 80 ? 'var(--success)' : escore.score >= 60 ? 'var(--warning)' : 'var(--danger)';
-        scoreDisplay = ' | 得分: <b style="color:' + scClr + ';">' + escore.score.toFixed(1) + '</b>';
+        popoverHtml += '<div class="pop-section"><div class="pop-title">评测得分</div>';
+        popoverHtml += '<div class="pop-value">综合: <b style="color:' + scClr + ';">' + escore.score.toFixed(1) + '</b> <span class="badge badge-llm" style="font-size:10px;">' + (escore.method || '-') + '</span></div>';
+        if (escore.metrics) {
+          const dims = escore.metrics;
+          const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
+          const dimBadges = dimKeys.filter(dk => typeof dims[dk] === 'object' && dims[dk] !== null && 'score' in dims[dk])
+            .map(dk => {
+              const dv = dims[dk];
+              const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
+              const skipped = dv.skipped ? ' ⏭️' : '';
+              return '<span class="dim-badge" style="background:' + (dv.score >= 80 ? '#d1fae5' : dv.score >= 60 ? '#fef3c7' : '#fee2e2') + ';color:' + dClr + ';">' + dk + skipped + ': ' + dv.score.toFixed(1) + '</span>';
+            }).join('');
+          if (dimBadges) popoverHtml += '<div style="margin-top:4px;">' + dimBadges + '</div>';
+        }
+        popoverHtml += '</div>';
       }
 
-      const label = layerNames[sp.span_type] || sp.span_type;
-      return '<div style="margin-bottom:10px;padding:12px;border:1px solid var(--border);border-radius:8px;">'
-        + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px;">'
-        + '<span class="badge badge-eval">#' + sp.sequence + ' ' + label + '</span>'
-        + '<span style="font-size:12px;color:var(--text-secondary);">' + (sp.latency_ms != null ? sp.latency_ms + 'ms' : '-') + ' | ' + (sp.tokens || 0) + ' tokens' + scoreDisplay + '</span>'
-        + '</div>'
-        + (sp.model ? '<p style="font-size:12px;color:var(--text-secondary);">Model: ' + escapeHtml(sp.model) + '</p>' : '')
-        + (sp.tool_name ? '<p style="font-size:12px;color:var(--text-secondary);">Tool: ' + escapeHtml(sp.tool_name) + (sp.tool_params ? ' ' + escapeHtml(JSON.stringify(sp.tool_params)) : '') + '</p>' : '')
-        + (dimBadges ? '<div style="margin:6px 0;padding:6px 10px;background:#f0fdf4;border-radius:4px;border-left:3px solid var(--success);">' + dimBadges + '</div>' : (escore ? '<div style="margin:6px 0;padding:4px 10px;background:#f9fafb;border-radius:4px;font-size:12px;color:var(--text-secondary);">综合: <b>' + escore.score.toFixed(1) + '</b> <span class="badge badge-llm" style="font-size:10px;">' + (escore.method || '-') + '</span></div>' : ''))
-        + (sp.input ? '<p style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>Input:</strong></p><pre style="max-height:100px;">' + escapeHtml(typeof sp.input === 'string' ? sp.input : JSON.stringify(sp.input, null, 2)) + '</pre>' : '')
-        + (sp.output ? '<p style="font-size:12px;color:var(--text-secondary);margin-top:4px;"><strong>Output:</strong></p><pre style="max-height:100px;">' + escapeHtml(typeof sp.output === 'string' ? sp.output : JSON.stringify(sp.output, null, 2)) + '</pre>' : '')
-        + '</div>';
-    }).join('') : '<div class="empty-state"><div class="icon">📄</div>暂无 Span 数据</div>';
+      if (sp.tool_name) {
+        popoverHtml += '<div class="pop-section"><div class="pop-title">工具调用</div>';
+        popoverHtml += '<div class="pop-value">Tool: <b>' + escapeHtml(sp.tool_name) + '</b></div>';
+        if (sp.tool_params) popoverHtml += '<div class="pop-value">Params: <code>' + escapeHtml(JSON.stringify(sp.tool_params)) + '</code></div>';
+        popoverHtml += '</div>';
+      }
 
+      if (sp.input) {
+        popoverHtml += '<div class="pop-section"><div class="pop-title">Input</div>';
+        popoverHtml += '<pre>' + escapeHtml(typeof sp.input === 'string' ? sp.input : JSON.stringify(sp.input, null, 2)) + '</pre></div>';
+      }
+      if (sp.output) {
+        popoverHtml += '<div class="pop-section"><div class="pop-title">Output</div>';
+        popoverHtml += '<pre>' + escapeHtml(typeof sp.output === 'string' ? sp.output : JSON.stringify(sp.output, null, 2)) + '</pre></div>';
+      }
+
+      // 存入全局 Map（by span.id），避免 HTML 属性编码截断
+      _popoverStore.set(sp.id, popoverHtml);
+
+      const latencyStr = sp.latency_ms != null ? fmtLatency(sp.latency_ms) : '';
+      return '<div class="span-node" data-span-id="' + sp.id + '">'
+        + '<div class="span-node-box">'
+        + '<div class="node-seq">#' + sp.sequence + '</div>'
+        + '<div class="node-icon">' + icon + '</div>'
+        + '<div class="node-type">' + lname + '</div>'
+        + (latencyStr ? '<div class="node-time" style="color:' + latencyColor(sp.latency_ms) + ';">' + latencyStr + '</div>' : '')
+        + '</div>'
+        + '</div>';
+    };
+
+    const buildArrow = () => '<div class="span-arrow"><svg viewBox="0 0 28 16"><line x1="0" y1="8" x2="20" y2="8"/><polyline points="14,3 22,8 14,13"/></svg></div>';
+
+    const spansHtml = spans.length
+      ? '<div class="span-chain-wrapper"><div class="span-chain">'
+        + spans.map((sp, i) => buildSpanNode(sp, i) + (i < spans.length - 1 ? buildArrow() : '')).join('')
+        + '</div></div>'
+      : '<div class="empty-state"><div class="icon">📄</div>暂无 Span 数据</div>';
+
+    // ── 评分 HTML ──
     const scoresHtml = scores.length ? scores.map(sc => {
       const dims = sc.metrics || {};
       const dimKeys = Object.keys(dims).filter(k => !k.startsWith('_'));
@@ -395,15 +664,107 @@ async function viewTraceDetail(traceId) {
           const dv = dims[dk];
           const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
           const skipped = dv.skipped ? ' ⏭️' : '';
-          const method = dv.method ? ` [${dv.method}]` : '';
-          return `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0;padding-left:16px;">↳ ${dk}${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b></div>`;
+          const method = dv.method ? ` <span style="font-size:9px;color:var(--text-secondary);">[${dv.method}]</span>` : '';
+          let h = `<div style="font-size:11px;color:var(--text-secondary);margin:3px 0;padding-left:14px;">↳ <b>${dk}</b>${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b>`;
+          // ── FactualAccuracy: LLM评分 + reasoning ──
+          if (dk === 'FactualAccuracy' && dv.llm_score != null) {
+            h += ` <span style="font-size:10px;background:#eef2ff;padding:1px 5px;border-radius:3px;">LLM: ${dv.llm_score}/5</span>`;
+            const r = dv.judge_trace?.reasoning;
+            if (r) h += `<div style="font-size:10px;color:#6b7280;margin:2px 0 0 0;padding:3px 8px;background:#fefce8;border-radius:3px;border-left:2px solid #fbbf24;font-style:italic;line-height:1.4;">"${escapeHtml(r.length > 150 ? r.substring(0,150)+'…' : r)}"</div>`;
+          }
+          // ── Completeness: 检查点覆盖详情 ──
+          if (dk === 'Completeness' && dv.details?.length) {
+            h += '<div style="margin:3px 0 0 0;">';
+            dv.details.forEach(d => {
+              const covClr = d.coverage === 'fully_covered' ? '#059669' : d.coverage === 'partially_covered' ? '#d97706' : '#dc2626';
+              const covLbl = d.coverage === 'fully_covered' ? '✓ 完全覆盖' : d.coverage === 'partially_covered' ? '◐ 部分覆盖' : '✗ 未覆盖';
+              const mLbl = {must_contain:'必须',prefer_contain:'建议',nice_to_have:'可选'}[d.match_mode] || d.match_mode || '';
+              const mClr = {must_contain:'#dc2626',prefer_contain:'#d97706',nice_to_have:'#6b7280'}[d.match_mode] || '#6b7280';
+              h += `<div style="font-size:10px;color:#374151;margin:1px 0;padding:3px 8px;background:#f9fafb;border-radius:3px;border-left:2px solid ${covClr};">`;
+              h += `<span style="color:${mClr};font-weight:600;font-size:9px;">[${mLbl}]</span> ${escapeHtml((d.point||'').length>80?(d.point||'').substring(0,80)+'…':d.point||'')}`;
+              h += ` <span style="color:${covClr};font-size:9px;font-weight:600;">${covLbl}</span>`;
+              if (d.evidence) h += `<div style="font-size:9px;color:#9ca3af;margin:1px 0 0 10px;font-style:italic;">"${escapeHtml(d.evidence.length>100?d.evidence.substring(0,100)+'…':d.evidence)}"</div>`;
+              h += '</div>';
+            });
+            if (dv.llm_overall_completeness != null)
+              h += `<div style="font-size:9px;color:var(--text-secondary);margin:2px 0 0 8px;">整体完整度: ${typeof dv.llm_overall_completeness==='number'?((dv.llm_overall_completeness*100).toFixed(0)+'%'):dv.llm_overall_completeness}</div>`;
+            h += '</div>';
+          }
+          // ── HallucinationScore: 逐句分析 ──
+          if (dk === 'HallucinationScore' && dv.judge_trace?.details?.length) {
+            h += '<div style="margin:3px 0 0 0;">';
+            dv.judge_trace.details.forEach(d => {
+              const isClean = d.label === 'clean';
+              const lblClr = isClean ? '#059669' : '#dc2626';
+              const lblTxt = isClean ? '✓ 无幻觉' : `✗ ${d.type || 'hallucination'}`;
+              h += `<div style="font-size:10px;color:#374151;margin:1px 0;padding:3px 8px;background:#f9fafb;border-radius:3px;border-left:2px solid ${lblClr};">`;
+              h += `<span style="color:${lblClr};font-weight:600;font-size:9px;">${lblTxt}</span> "${escapeHtml((d.sentence||'').length>60?(d.sentence||'').substring(0,60)+'…':d.sentence||'')}"`;
+              if (d.explanation) h += `<div style="font-size:9px;color:#9ca3af;margin:1px 0 0 10px;font-style:italic;">${escapeHtml(d.explanation.length>120?d.explanation.substring(0,120)+'…':d.explanation)}</div>`;
+              h += '</div>';
+            });
+            if (dv.overall_severity && dv.overall_severity !== 'none')
+              h += `<div style="font-size:9px;color:var(--danger);margin:2px 0 0 8px;">严重度: ${dv.overall_severity}</div>`;
+            h += '</div>';
+          }
+          // ── Efficiency: 工具调用详情 ──
+          if (dk === 'Efficiency' && dv.actual_count != null) {
+            h += ` <span style="font-size:10px;color:var(--text-secondary);">(${dv.actual_count}/${dv.expected_count} 次)</span>`;
+          }
+          // ── SuccessRate: 成功/总数 ──
+          if (dk === 'SuccessRate' && dv.total != null) {
+            h += ` <span style="font-size:10px;color:var(--text-secondary);">${dv.success}/${dv.total} 成功</span>`;
+          }
+          // ── LatencyScore: 延迟值 ──
+          if (dk === 'LatencyScore' && dv.total_latency_ms != null) {
+            const latStr = dv.total_latency_ms < 1000 ? `${dv.total_latency_ms}ms` : `${(dv.total_latency_ms/1000).toFixed(1)}s`;
+            h += ` <span style="font-size:10px;color:var(--text-secondary);">${latStr}</span>`;
+          }
+          // ── TokenEfficiency: token数 ──
+          if (dk === 'TokenEfficiency' && dv.total_tokens != null) {
+            h += ` <span style="font-size:10px;color:var(--text-secondary);">${dv.total_tokens} tokens</span>`;
+          }
+          // ── ConfidenceCalibration: 置信度 ──
+          if (dk === 'ConfidenceCalibration' && dv.confidence != null) {
+            h += ` <span style="font-size:10px;color:var(--text-secondary);">置信度: ${dv.confidence}</span>`;
+          }
+          h += '</div>';
+          return h;
         }).join('');
+      // ── Gold Answer ──
+      let goldHtml = '';
+      const enriched = dims._enriched_expected;
+      if (enriched?.gold_answer) {
+        const ann = dims._annotation_source?.gold_answer;
+        const srcBadge = ann?.method === 'llm_auto_generated'
+          ? '<span class="badge badge-llm" style="margin-left:4px;">LLM 生成</span>'
+          : ann?.method === 'llm_generation_failed'
+            ? '<span class="badge badge-error" style="margin-left:4px;">生成失败</span>'
+            : (enriched.gold_answer ? '<span class="badge badge-manual" style="margin-left:4px;">人工</span>' : '');
+        goldHtml = `<div style="margin:6px 0 0 0;padding:6px 10px;background:#fefce8;border-radius:4px;border-left:3px solid #fbbf24;font-size:11px;">`
+          + `<span style="font-weight:600;color:#92400e;">参考答案</span>${srcBadge}`
+          + `<div style="color:#374151;margin-top:2px;line-height:1.5;">${escapeHtml(enriched.gold_answer)}</div></div>`;
+      }
+      // ── Active Weights ──
+      let weightsHtml = '';
+      if (dims._active_weights) {
+        const aw = dims._active_weights;
+        const wTags = Object.entries(aw).map(([k,v]) => `<span style="font-size:9px;padding:1px 5px;background:#f3f4f6;border-radius:3px;margin:1px 2px 1px 0;display:inline-block;">${k}: <b>${(v*100).toFixed(0)}%</b></span>`).join('');
+        weightsHtml = `<div style="margin:4px 0 0 0;display:flex;flex-wrap:wrap;gap:1px;"><span style="font-size:9px;color:var(--text-secondary);margin-right:4px;">权重:</span>${wTags}</div>`;
+      }
+      const layerSpecific = layerSpecificDetails(sc.layer, dims);
       const layerLabel = sc.layer ? (layerNames[sc.layer] || sc.layer) : (sc.span_id ? '(orphan)' : '🏁 结果');
       const linkedSpan = sc.span_id ? spans.find(sp => sp.id === sc.span_id) : null;
       const spanRef = linkedSpan ? ` ← #${linkedSpan.sequence} ${layerNames[linkedSpan.span_type] || linkedSpan.span_type}` : '';
+      const scoreGaugePct = Math.min(100, Math.max(0, sc.score));
       return `<div style="margin-bottom:8px;padding:10px;background:#f9fafb;border-radius:6px;border-left:3px solid var(--primary);">
-        <div style="font-weight:600;">${layerLabel} <span style="color:${sc.score >= 80 ? 'var(--success)' : sc.score >= 60 ? 'var(--warning)' : 'var(--danger)'};">${sc.score.toFixed(1)}</span> <span class="badge badge-llm" style="font-size:10px;">${sc.method||'-'}</span><span style="font-size:11px;color:var(--text-secondary);margin-left:4px;">${spanRef}</span></div>
+        <div style="font-weight:600;display:flex;justify-content:space-between;align-items:center;">
+          <span>${layerLabel} <span style="color:${sc.score >= 80 ? 'var(--success)' : sc.score >= 60 ? 'var(--warning)' : 'var(--danger)'};">${sc.score.toFixed(1)}</span> <span class="badge badge-llm" style="font-size:10px;">${sc.method||'-'}</span>${spanRef}</span>
+        </div>
+        <div class="score-gauge" style="margin-top:6px;"><div class="score-gauge-fill ${sc.score >= 80 ? 'high' : sc.score >= 60 ? 'mid' : 'low'}" style="width:${scoreGaugePct}%;"></div></div>
+        ${goldHtml}
         ${dimDetail}
+        ${weightsHtml}
+        ${layerSpecific}
       </div>`;
     }).join('') : '<div class="empty-state"><div class="icon">📊</div>暂无评分数据</div>';
 
@@ -564,6 +925,69 @@ async function viewCaseScores(caseId) {
     const historyHtml = data.history && data.history.length ? data.history.map((run, i) => {
       const runOverall = run.overall_score != null ? run.overall_score.toFixed(1) : '-';
       const runClr = run.overall_score != null ? (run.overall_score >= 80 ? 'var(--success)' : run.overall_score >= 60 ? 'var(--warning)' : 'var(--danger)') : 'var(--text-secondary)';
+
+      // ── 渲染 expected_snapshot ──
+      let snapshotHtml = '';
+      if (run.expected_snapshot && typeof run.expected_snapshot === 'object') {
+        const snap = run.expected_snapshot;
+        const goldAns = snap.gold_answer || '';
+        const expAns = snap.expected_answer || {};
+        const checkPoints = expAns.check_points || [];
+
+        // 推断标注来源：从 scores metrics 中找 _annotation_source
+        let annSource = {};
+        if (run.scores) {
+          for (const sc of run.scores) {
+            if (sc.metrics && sc.metrics._annotation_source) {
+              annSource = sc.metrics._annotation_source;
+              break;
+            }
+          }
+        }
+
+        const goldBadge = annSource.gold_answer
+          ? (annSource.gold_answer.method === 'llm_auto_generated'
+            ? '<span class="badge badge-llm" style="margin-left:6px;">LLM 生成</span>'
+            : annSource.gold_answer.method === 'llm_generation_failed'
+              ? '<span class="badge badge-error" style="margin-left:6px;">生成失败</span>'
+              : '')
+          : (goldAns ? '<span class="badge badge-manual" style="margin-left:6px;">人工</span>' : '');
+
+        const expBadge = annSource.expected_answer
+          ? (annSource.expected_answer.method === 'llm_auto_generated'
+            ? '<span class="badge badge-llm" style="margin-left:6px;">LLM 生成</span>'
+            : annSource.expected_answer.method === 'llm_generation_failed'
+              ? '<span class="badge badge-error" style="margin-left:6px;">生成失败</span>'
+              : '')
+          : (checkPoints.length ? '<span class="badge badge-manual" style="margin-left:6px;">人工</span>' : '');
+
+        let cpHtml = '';
+        if (checkPoints.length) {
+          cpHtml = '<table style="width:100%;font-size:11px;margin-top:4px;border-collapse:collapse;">'
+            + '<tr style="background:#f3f4f6;"><th style="padding:3px 6px;text-align:left;font-size:10px;">检查点</th>'
+            + '<th style="padding:3px 6px;text-align:left;font-size:10px;">模式</th>'
+            + '<th style="padding:3px 6px;text-align:center;font-size:10px;">权重</th></tr>'
+            + checkPoints.map(cp => {
+              const matchColors = {must_contain:'#dc2626', prefer_contain:'#d97706', nice_to_have:'#6b7280'};
+              const matchLabels = {must_contain:'必须', prefer_contain:'建议', nice_to_have:'可选'};
+              const mc = matchColors[cp.match] || '#6b7280';
+              return '<tr><td style="padding:3px 6px;border-bottom:1px solid #f3f4f6;">' + escapeHtml(cp.point || '') + '</td>'
+                + '<td style="padding:3px 6px;border-bottom:1px solid #f3f4f6;color:' + mc + ';font-weight:600;font-size:10px;">' + (matchLabels[cp.match] || cp.match || '-') + '</td>'
+                + '<td style="padding:3px 6px;border-bottom:1px solid #f3f4f6;text-align:center;">' + (cp.weight != null ? cp.weight : '-') + '</td></tr>';
+            }).join('')
+            + '</table>';
+        }
+
+        if (goldAns || checkPoints.length) {
+          snapshotHtml = '<div style="margin:8px 0;padding:10px;background:#f0f4ff;border-radius:6px;border:1px solid #c7d2fe;">'
+            + '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.3px;color:#4338ca;margin-bottom:6px;">Expected Snapshot</div>'
+            + (goldAns ? '<div style="margin-bottom:6px;"><span style="font-size:12px;color:var(--text-secondary);">参考答案</span>' + goldBadge
+              + '<div style="font-size:12px;margin-top:2px;line-height:1.5;">' + escapeHtml(goldAns) + '</div></div>' : '')
+            + (checkPoints.length ? '<div><span style="font-size:12px;color:var(--text-secondary);">检查点</span>' + expBadge + cpHtml + '</div>' : '')
+            + '</div>';
+        }
+      }
+
       const scoresDetail = run.scores ? run.scores.map(s => {
         const layer = s.layer || 'unknown';
         const layerLabel = layerNames[layer] || layer;
@@ -575,19 +999,86 @@ async function viewCaseScores(caseId) {
             const dv = dims[dk]; const dClr = dv.score >= 80 ? 'var(--success)' : dv.score >= 60 ? 'var(--warning)' : 'var(--danger)';
             const skipped = dv.skipped ? ' ⏭️' : '';
             const method = dv.method ? ` <span style="font-size:9px;color:var(--text-secondary);">[${dv.method}]</span>` : '';
-            return `<div style="font-size:11px;color:var(--text-secondary);margin:2px 0;padding-left:16px;">↳ ${dk}${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b></div>`;
+            let h = `<div style="font-size:11px;color:var(--text-secondary);margin:3px 0;padding-left:14px;">↳ <b>${dk}</b>${skipped}${method}: <b style="color:${dClr};">${dv.score.toFixed(1)}</b>`;
+            if (dk === 'FactualAccuracy' && dv.llm_score != null) {
+              h += ` <span style="font-size:10px;background:#eef2ff;padding:1px 5px;border-radius:3px;">LLM: ${dv.llm_score}/5</span>`;
+              const r = dv.judge_trace?.reasoning;
+              if (r) h += `<div style="font-size:10px;color:#6b7280;margin:2px 0 0 0;padding:3px 8px;background:#fefce8;border-radius:3px;border-left:2px solid #fbbf24;font-style:italic;line-height:1.4;">"${escapeHtml(r.length > 150 ? r.substring(0,150)+'…' : r)}"</div>`;
+            }
+            if (dk === 'Completeness' && dv.details?.length) {
+              h += '<div style="margin:3px 0 0 0;">';
+              dv.details.forEach(d => {
+                const covClr = d.coverage === 'fully_covered' ? '#059669' : d.coverage === 'partially_covered' ? '#d97706' : '#dc2626';
+                const covLbl = d.coverage === 'fully_covered' ? '✓ 完全覆盖' : d.coverage === 'partially_covered' ? '◐ 部分覆盖' : '✗ 未覆盖';
+                const mLbl = {must_contain:'必须',prefer_contain:'建议',nice_to_have:'可选'}[d.match_mode] || d.match_mode || '';
+                const mClr = {must_contain:'#dc2626',prefer_contain:'#d97706',nice_to_have:'#6b7280'}[d.match_mode] || '#6b7280';
+                h += `<div style="font-size:10px;color:#374151;margin:1px 0;padding:3px 8px;background:#f9fafb;border-radius:3px;border-left:2px solid ${covClr};">`;
+                h += `<span style="color:${mClr};font-weight:600;font-size:9px;">[${mLbl}]</span> ${escapeHtml((d.point||'').length>80?(d.point||'').substring(0,80)+'…':d.point||'')}`;
+                h += ` <span style="color:${covClr};font-size:9px;font-weight:600;">${covLbl}</span>`;
+                if (d.evidence) h += `<div style="font-size:9px;color:#9ca3af;margin:1px 0 0 10px;font-style:italic;">"${escapeHtml(d.evidence.length>100?d.evidence.substring(0,100)+'…':d.evidence)}"</div>`;
+                h += '</div>';
+              });
+              if (dv.llm_overall_completeness != null)
+                h += `<div style="font-size:9px;color:var(--text-secondary);margin:2px 0 0 8px;">整体完整度: ${typeof dv.llm_overall_completeness==='number'?((dv.llm_overall_completeness*100).toFixed(0)+'%'):dv.llm_overall_completeness}</div>`;
+              h += '</div>';
+            }
+            if (dk === 'HallucinationScore' && dv.judge_trace?.details?.length) {
+              h += '<div style="margin:3px 0 0 0;">';
+              dv.judge_trace.details.forEach(d => {
+                const isClean = d.label === 'clean';
+                const lblClr = isClean ? '#059669' : '#dc2626';
+                const lblTxt = isClean ? '✓ 无幻觉' : `✗ ${d.type || 'hallucination'}`;
+                h += `<div style="font-size:10px;color:#374151;margin:1px 0;padding:3px 8px;background:#f9fafb;border-radius:3px;border-left:2px solid ${lblClr};">`;
+                h += `<span style="color:${lblClr};font-weight:600;font-size:9px;">${lblTxt}</span> "${escapeHtml((d.sentence||'').length>60?(d.sentence||'').substring(0,60)+'…':d.sentence||'')}"`;
+                if (d.explanation) h += `<div style="font-size:9px;color:#9ca3af;margin:1px 0 0 10px;font-style:italic;">${escapeHtml(d.explanation.length>120?d.explanation.substring(0,120)+'…':d.explanation)}</div>`;
+                h += '</div>';
+              });
+              if (dv.overall_severity && dv.overall_severity !== 'none')
+                h += `<div style="font-size:9px;color:var(--danger);margin:2px 0 0 8px;">严重度: ${dv.overall_severity}</div>`;
+              h += '</div>';
+            }
+            if (dk === 'Efficiency' && dv.actual_count != null) h += ` <span style="font-size:10px;color:var(--text-secondary);">(${dv.actual_count}/${dv.expected_count} 次)</span>`;
+            if (dk === 'SuccessRate' && dv.total != null) h += ` <span style="font-size:10px;color:var(--text-secondary);">${dv.success}/${dv.total} 成功</span>`;
+            if (dk === 'LatencyScore' && dv.total_latency_ms != null) { const ls = dv.total_latency_ms < 1000 ? `${dv.total_latency_ms}ms` : `${(dv.total_latency_ms/1000).toFixed(1)}s`; h += ` <span style="font-size:10px;color:var(--text-secondary);">${ls}</span>`; }
+            if (dk === 'TokenEfficiency' && dv.total_tokens != null) h += ` <span style="font-size:10px;color:var(--text-secondary);">${dv.total_tokens} tokens</span>`;
+            if (dk === 'ConfidenceCalibration' && dv.confidence != null) h += ` <span style="font-size:10px;color:var(--text-secondary);">置信度: ${dv.confidence}</span>`;
+            h += '</div>';
+            return h;
           }).join('');
+        // Gold Answer
+        let goldHtml = '';
+        const enriched = dims._enriched_expected;
+        if (enriched?.gold_answer) {
+          const ann = dims._annotation_source?.gold_answer;
+          const srcBadge = ann?.method === 'llm_auto_generated' ? '<span class="badge badge-llm" style="margin-left:4px;">LLM 生成</span>'
+            : ann?.method === 'llm_generation_failed' ? '<span class="badge badge-error" style="margin-left:4px;">生成失败</span>'
+            : '<span class="badge badge-manual" style="margin-left:4px;">人工</span>';
+          goldHtml = `<div style="margin:4px 0 0 0;padding:5px 8px;background:#fefce8;border-radius:4px;border-left:3px solid #fbbf24;font-size:11px;">`
+            + `<span style="font-weight:600;color:#92400e;">参考答案</span>${srcBadge}`
+            + `<div style="color:#374151;margin-top:2px;line-height:1.4;">${escapeHtml(enriched.gold_answer)}</div></div>`;
+        }
+        // Active Weights
+        let weightsHtml = '';
+        if (dims._active_weights) {
+          const wTags = Object.entries(dims._active_weights).map(([k,v]) => `<span style="font-size:9px;padding:1px 4px;background:#f3f4f6;border-radius:3px;margin:1px 1px;">${k}:<b>${(v*100).toFixed(0)}%</b></span>`).join('');
+          weightsHtml = `<div style="margin:3px 0 0 0;display:flex;flex-wrap:wrap;gap:1px;"><span style="font-size:9px;color:var(--text-secondary);margin-right:3px;">权重:</span>${wTags}</div>`;
+        }
+        const layerSpecific = layerSpecificDetails(layer, dims);
         return `<div style="margin:4px 0;padding:6px 10px;background:#f9fafb;border-radius:4px;border-left:3px solid var(--primary);">
           <span style="font-weight:600;">${layerLabel}</span>
           <span style="font-weight:700;color:${scClr};margin-left:8px;">${s.score.toFixed(1)}</span>
           <span class="badge badge-llm" style="font-size:10px;margin-left:6px;">${s.method||'-'}</span>
+          ${goldHtml}
           ${dimDetail}
+          ${weightsHtml}
+          ${layerSpecific}
         </div>`;
       }).join('') : '<span style="color:var(--text-secondary);">暂无评分</span>';
       const borderColor = layerColors[i % layerColors.length];
       return `<div style="margin-bottom:16px;padding:14px;border:1px solid var(--border);border-left:4px solid ${borderColor};border-radius:8px;">
         <div style="font-weight:700;margin-bottom:8px;font-size:14px;color:${borderColor};">第 ${i+1} 次打分</div>
         <div style="font-size:12px;color:var(--text-secondary);margin-bottom:8px;">${run.created_at ? new Date(run.created_at).toLocaleString('zh-CN') : ''} | 综合得分: <b style="color:${runClr};">${runOverall}</b></div>
+        ${snapshotHtml}
         ${scoresDetail}
       </div>`;
     }).join('') : '<p>暂无评分历史，请先执行评分</p>';
@@ -612,6 +1103,102 @@ function escapeHtml(str) {
   const div = document.createElement('div');
   div.textContent = str || '';
   return div.innerHTML;
+}
+
+// ═══ Final Response Raw / Markdown 切换 ═══
+function switchFRMode(btn, mode) {
+  const section = btn.closest('.fr-section');
+  if (!section) return;
+  const rawEl = section.querySelector('.fr-raw');
+  const previewEl = section.querySelector('.fr-preview');
+  const toggles = section.querySelectorAll('.fr-toggle');
+
+  toggles.forEach(t => t.classList.remove('active'));
+  btn.classList.add('active');
+
+  if (mode === 'raw') {
+    rawEl.classList.remove('hidden');
+    previewEl.classList.remove('visible');
+  } else {
+    rawEl.classList.add('hidden');
+    previewEl.classList.add('visible');
+    // 按需渲染 md → html（缓存）
+    if (!previewEl.dataset.rendered) {
+      const rawText = rawEl.textContent || '';
+      if (typeof marked !== 'undefined') {
+        marked.setOptions?.({ breaks: true, gfm: true });
+        previewEl.innerHTML = marked.parse(rawText);
+      } else {
+        previewEl.innerHTML = '<p style="color:var(--danger);">marked.js 未加载，请检查网络</p>';
+      }
+      previewEl.dataset.rendered = '1';
+    }
+  }
+}
+
+// ═══ Span Popover 定位（全局 popover，脱离 slide-panel transform containing block） ═══
+const _popGlobal = $('#span-popover-global');
+const _popoverStore = new Map(); // span.id → popover HTML，避免 data 属性编码截断
+let _activeNode = null;
+
+document.addEventListener('mouseover', function(e) {
+  // 鼠标在 popover 内部 → 保持显示
+  if (e.target.closest('#span-popover-global')) return;
+
+  const node = e.target.closest('.span-node');
+  if (!node) {
+    hidePopover();
+    return;
+  }
+
+  // 同一个 node 不做重复处理
+  if (node === _activeNode) return;
+
+  // 从全局 Map 读取 popover 内容（by span.id，避免属性编码截断）
+  const spanId = node.dataset.spanId;
+  const popoverHtml = spanId ? _popoverStore.get(spanId) : null;
+  if (!popoverHtml) return;
+
+  // 填充全局 popover
+  _popGlobal.innerHTML = popoverHtml;
+  _popGlobal.style.maxHeight = '420px';
+  _popGlobal.style.width = '340px';
+
+  // 定位
+  const box = node.querySelector('.span-node-box');
+  if (!box) return;
+  const boxRect = box.getBoundingClientRect();
+  const popW = 340, popH = Math.min(420, _popGlobal.scrollHeight || 400);
+  let left = boxRect.left + boxRect.width / 2 - popW / 2;
+  let top = boxRect.bottom + 8;
+
+  // 边界修正：优先显示在下方，空间不够则翻到上方
+  if (top + popH > window.innerHeight - 8) {
+    top = boxRect.top - popH - 8;
+    if (top < 8) top = 8;
+  }
+  if (left < 8) left = 8;
+  if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
+
+  _popGlobal.style.left = left + 'px';
+  _popGlobal.style.top = top + 'px';
+  _popGlobal.style.display = 'block';
+  _activeNode = node;
+}, true);
+
+document.addEventListener('mouseout', function(e) {
+  // 移到 popover 上 → 保持
+  if (e.relatedTarget?.closest?.('#span-popover-global')) return;
+  // 移到另一个 span-node 上 → mouseover 会处理
+  if (e.relatedTarget?.closest?.('.span-node')) return;
+  // 彻底离开 → 隐藏
+  hidePopover();
+}, true);
+
+function hidePopover() {
+  _popGlobal.style.display = 'none';
+  _popGlobal.innerHTML = '';
+  _activeNode = null;
 }
 
 // ═══ 事件绑定 ═══

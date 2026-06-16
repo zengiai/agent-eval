@@ -7,9 +7,10 @@ SemanticSimilarity 暂用词重叠，后续可升级为 BERTScore。
 import json
 import logging
 import re
+import time
 from typing import Dict, Any, List, Optional
 
-from backend.evaluators.base import BaseEvaluator, EvalMethod
+from backend.evaluators.base import BaseEvaluator, EvalMethod, EvalResult
 
 logger = logging.getLogger(__name__)
 
@@ -45,6 +46,170 @@ class GenerationEvaluator(BaseEvaluator):
     def _get_llm_judge(self, context: Dict) -> Optional[Any]:
         """从 context 中提取 LLMJudge 实例。"""
         return context.get("llm_judge")
+
+    # ── 覆写评测入口：自动生成缺失标注 ────────────────────────────
+
+    def evaluate(self, span: Dict, expected: Dict, **context) -> EvalResult:
+        """覆写基类 evaluate()，在评测前自动补全缺失的 gold_answer / expected_answer。"""
+        start = time.perf_counter()
+        try:
+            # 1. 预处理：补全缺失标注
+            enriched_expected, annotation_source = self._ensure_expected_annotations(expected, context)
+
+            # 2. 正常评测（使用补全后的 expected）
+            result = self._adaptive_evaluate(span, enriched_expected, **context)
+            result.latency_ms = round((time.perf_counter() - start) * 1000, 2)
+            result.evaluator_version = self.version
+
+            # 3. 附加标注来源和补全快照到 metrics
+            if annotation_source:
+                result.metrics["_annotation_source"] = annotation_source
+                result.metrics["_enriched_expected"] = dict(enriched_expected)
+                # 清理内部标记，不污染持久化数据
+                result.metrics["_enriched_expected"].pop("_enriched_expected", None)
+
+            return result
+        except Exception as e:
+            return EvalResult(
+                layer=self.layer_name,
+                total_score=0.0,
+                metrics={},
+                latency_ms=round((time.perf_counter() - start) * 1000, 2),
+                evaluator_version=self.version,
+                error=str(e),
+            )
+
+    # ── 标注补全核心逻辑 ────────────────────────────────────────
+
+    def _ensure_expected_annotations(
+        self, expected: Dict, context: Dict
+    ) -> tuple:
+        """检测并补全缺失的 gold_answer / expected_answer。
+
+        Returns:
+            (enriched_expected, annotation_source)
+            - enriched_expected: 补全后的 expected dict
+            - annotation_source: 标注来源标记 dict，空 {} 表示无需生成
+        """
+        enriched = dict(expected)  # 浅拷贝，不污染原始数据
+        annotation_source = {}
+        llm_judge = self._get_llm_judge(context)
+
+        if not llm_judge or not llm_judge.is_available():
+            return enriched, annotation_source
+
+        gold_answer = enriched.get("gold_answer", "") or ""
+        exp_answer = enriched.get("expected_answer", {}) or {}
+
+        # 1. 补全 gold_answer
+        if not gold_answer.strip():
+            query = context.get("query", "")
+            tool_results = self._extract_tool_results(context)
+            ctx_info = context.get("trace_context", "") or ""
+            gen_gold = self._generate_gold_answer(query, ctx_info, tool_results, llm_judge)
+            if gen_gold:
+                enriched["gold_answer"] = gen_gold["gold_answer"]
+                annotation_source["gold_answer"] = {
+                    "method": "llm_auto_generated",
+                    "confidence": gen_gold.get("confidence", 0.0),
+                }
+                gold_answer = gen_gold["gold_answer"]
+            else:
+                annotation_source["gold_answer"] = {
+                    "method": "llm_generation_failed",
+                    "fallback": "original_degradation",
+                }
+
+        # 2. 补全 expected_answer
+        check_points = exp_answer.get("check_points", [])
+        if not check_points:
+            query = context.get("query", "")
+            gen_exp = self._generate_expected_answer(query, gold_answer, llm_judge)
+            if gen_exp and gen_exp.get("check_points"):
+                enriched["expected_answer"] = gen_exp
+                annotation_source["expected_answer"] = {
+                    "method": "llm_auto_generated",
+                    "confidence": gen_exp.get("confidence", 0.0),
+                    "check_points_count": len(gen_exp.get("check_points", [])),
+                }
+            else:
+                annotation_source["expected_answer"] = {
+                    "method": "llm_generation_failed",
+                    "fallback": "original_degradation",
+                }
+
+        return enriched, annotation_source
+
+    def _generate_gold_answer(
+        self, query: str, context_info: str, tool_results: str, llm_judge
+    ) -> Optional[Dict]:
+        """通过 LLM 生成参考答案。
+
+        Returns:
+            包含 gold_answer / confidence / reasoning 的 dict，失败返回 None。
+        """
+        try:
+            result = llm_judge.judge_by_template(
+                "generation/generate_gold_answer",
+                {
+                    "query": query or "(未提供问题)",
+                    "context": context_info or "(无额外上下文)",
+                    "tool_results": tool_results or "(无工具调用结果)",
+                },
+            )
+            gold = result.get("gold_answer", "")
+            # 过短结果视为生成失败
+            if not gold or len(gold.strip()) < 5:
+                logger.warning("gold_answer 生成结果过短，视为失败")
+                return None
+            return result
+        except Exception as e:
+            logger.warning("gold_answer LLM 生成失败: %s", e)
+            return None
+
+    def _generate_expected_answer(
+        self, query: str, gold_answer: str, llm_judge
+    ) -> Optional[Dict]:
+        """通过 LLM 生成检查点结构。
+
+        Returns:
+            包含 check_points / format / divergent_ok / confidence 的 dict，失败返回 None。
+        """
+        try:
+            result = llm_judge.judge_by_template(
+                "generation/generate_expected_answer",
+                {
+                    "query": query or "(未提供问题)",
+                    "gold_answer": gold_answer or "(无参考答案)",
+                },
+            )
+            check_points = result.get("check_points", [])
+            # 无有效检查点且非发散型问题视为失败
+            if not check_points and not result.get("divergent_ok"):
+                logger.warning("expected_answer 生成无有效 check_points，视为失败")
+                return None
+            return result
+        except Exception as e:
+            logger.warning("expected_answer LLM 生成失败: %s", e)
+            return None
+
+    def _extract_tool_results(self, context: Dict) -> str:
+        """从 context 中提取工具调用结果文本。"""
+        all_spans = context.get("all_spans", [])
+        if not all_spans:
+            return ""
+        parts = []
+        for sp in all_spans:
+            if sp.get("span_type") == "tool_call":
+                tool_name = sp.get("tool_name", "unknown")
+                tool_result = sp.get("tool_result", "")
+                if tool_result:
+                    result_str = (
+                        tool_result if isinstance(tool_result, str)
+                        else json.dumps(tool_result, ensure_ascii=False, indent=2)
+                    )
+                    parts.append(f"[{tool_name}] {result_str}")
+        return "\n".join(parts) if parts else ""
 
     # ── 核心评测入口 ────────────────────────────────────────────
 

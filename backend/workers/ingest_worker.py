@@ -167,14 +167,38 @@ class IngestWorker:
 
             # 处理 trace_finish
             for event in trace_finishes:
+                tid = UUID(event["trace_id"])
+                total_latency_ms = event.get("total_latency_ms")
+                total_tokens = event.get("total_tokens")
+
+                # 兜底：若事件未携带聚合值，从已入库 spans 实时计算
+                if total_latency_ms is None or total_tokens is None:
+                    span_result = await session.execute(
+                        select(Span.latency_ms, Span.tokens).where(Span.trace_id == tid)
+                    )
+                    span_rows = span_result.all()
+                    if total_latency_ms is None:
+                        total_latency_ms = sum(
+                            (row[0] or 0) for row in span_rows
+                        )
+                    if total_tokens is None:
+                        agg_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                        for row in span_rows:
+                            usage = row[1]
+                            if isinstance(usage, dict):
+                                for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                                    if key in usage:
+                                        agg_tokens[key] = agg_tokens.get(key, 0) + int(usage[key])
+                        total_tokens = agg_tokens
+
                 stmt = (
                     update(Trace)
-                    .where(Trace.id == UUID(event["trace_id"]))
+                    .where(Trace.id == tid)
                     .values(
                         final_response=event.get("final_response"),
                         status=event.get("status", "success"),
-                        total_latency_ms=event.get("total_latency_ms"),
-                        total_tokens=event.get("total_tokens"),
+                        total_latency_ms=total_latency_ms,
+                        total_tokens=total_tokens,
                         total_cost_usd=event.get("total_cost_usd"),
                     )
                 )

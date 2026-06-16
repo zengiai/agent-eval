@@ -41,7 +41,8 @@ from backend.core.models import Trace, Span, EvalScore, EvalCase
 # ═══════════════════════════════════════════════════════════════════════════
 
 LLM_CONFIG = {
-    "model": "qwen3.7-plus",
+    "model": "qwen3.7-max",
+    "fast_model": "qwen3.6-flash",
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "api_key": os.environ.get(
         "DASHSCOPE_API_KEY",

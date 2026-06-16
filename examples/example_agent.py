@@ -30,7 +30,8 @@ from agent_eval_sdk import TraceReporter
 # ═══════════════════════════════════════════════════════════════════════════
 
 LLM_CONFIG = {
-    "model": "qwen3.7-plus",
+    "model": "qwen3.7-max",
+    "fast_model": "qwen3.6-flash",
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
     "api_key": os.environ.get(
         "DASHSCOPE_API_KEY",
@@ -107,13 +108,15 @@ class ExampleAgent:
     def __init__(
         self,
         reporter: Optional[TraceReporter],
-        model: str = "qwen3.7-plus",
+        model: str = "qwen3.7-max",
+        fast_model: str = "qwen3.6-flash",
         base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         api_key: Optional[str] = None,
     ):
         self.reporter = reporter
         self.client = OpenAI(base_url=base_url, api_key=api_key)
         self.model = model
+        self.fast_model = fast_model
 
     # ── 非流式（兼容旧接口）─────────────────────────────────────────
 
@@ -159,7 +162,7 @@ class ExampleAgent:
                     input={"query": query},
                     output=intent_result,
                     latency_ms=latency_ms,
-                    model=self.model,
+                    model=self.fast_model,
                 )
 
             # ── Span 2: retrieval（模拟）─────────────────────────────
@@ -330,7 +333,7 @@ class ExampleAgent:
                     input={"query": query},
                     output=intent_result,
                     latency_ms=latency_ms,
-                    model=self.model,
+                    model=self.fast_model,
                 )
             yield f"[status] ✅ 意图: {', '.join(intent_result.get('intents', ['unknown']))}"
 
@@ -520,7 +523,7 @@ class ExampleAgent:
             },
         ]
         resp = self.client.chat.completions.create(
-            model=self.model, messages=messages, temperature=0.1, max_tokens=128
+            model=self.fast_model, messages=messages, temperature=0.1, max_tokens=128
         )
         content = resp.choices[0].message.content.strip()
         try:
@@ -573,12 +576,13 @@ class OtelExampleAgent(ExampleAgent):
 
     def __init__(
         self,
-        model: str = "qwen3.7-plus",
+        model: str = "qwen3.7-max",
+        fast_model: str = "qwen3.6-flash",
         base_url: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         api_key: Optional[str] = None,
     ):
         # OTel 模式不需要 TraceReporter
-        super().__init__(reporter=None, model=model, base_url=base_url, api_key=api_key)
+        super().__init__(reporter=None, model=model, fast_model=fast_model, base_url=base_url, api_key=api_key)
 
     def run_stream_tokens(
         self, query: str, run_id: Optional[str] = None
@@ -611,7 +615,7 @@ class OtelExampleAgent(ExampleAgent):
                 t0 = time.monotonic()
                 with tracer.start_as_current_span(
                     "intent_classify",
-                    attributes={"eval.span_type": "intent", "llm.model": self.model},
+                    attributes={"eval.span_type": "intent", "llm.model": self.fast_model},
                 ) as span:
                     intent_result = self._classify_intent(query)
                     span.set_attribute("input", _json_mod.dumps({"query": query}))

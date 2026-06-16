@@ -42,7 +42,7 @@ def sample_span_intent() -> Dict[str, Any]:
         "output": {"intents": ["weather_query"], "confidence": 0.95},
         "latency_ms": 120,
         "tokens": {"input": 50, "output": 20},
-        "model": "gpt-4o",
+        "model": "qwen3.7-max",
     }
 
 
@@ -99,7 +99,7 @@ def sample_span_generation() -> Dict[str, Any]:
         "output": {"response": "北京今天晴，气温 -5°C ~ 3°C。"},
         "latency_ms": 800,
         "tokens": {"input": 300, "output": 100},
-        "model": "gpt-4o",
+        "model": "qwen3.7-max",
     }
 
 

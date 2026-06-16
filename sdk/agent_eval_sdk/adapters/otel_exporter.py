@@ -199,12 +199,27 @@ class EvalSpanExporter(SpanExporter):
                 for seq, s in enumerate(all_spans, start=1):
                     self._push(_span_to_event(s, seq, self._span_type_rules))
 
+                # 计算 trace 级聚合指标
+                total_latency_ms = 0
+                total_tokens = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+                for s in all_spans:
+                    s_latency_ns = s.end_time - s.start_time
+                    total_latency_ms += max(0, s_latency_ns // 1_000_000)
+                    s_attrs = _safe_attrs(s)
+                    usage = s_attrs.get("llm.usage")
+                    if isinstance(usage, dict):
+                        for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
+                            if key in usage:
+                                total_tokens[key] = total_tokens.get(key, 0) + int(usage[key])
+
                 # trace_finish
                 self._push({
                     "type": "trace_finish",
                     "trace_id": tid,
                     "final_response": attrs.get("final_response"),
                     "status": _map_status(span),
+                    "total_latency_ms": total_latency_ms,
+                    "total_tokens": total_tokens,
                     "timestamp": time.time(),
                 })
             else:

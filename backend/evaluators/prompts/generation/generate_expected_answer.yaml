@@ -1,0 +1,55 @@
+# 生成层 — 自动生成预期回答结构 (expected_answer) Prompt
+version: "1.0.0"
+model: "qwen3.7-max"
+temperature: 0.0
+max_tokens: 1024
+
+system_prompt: |
+  你是一个评测检查点生成专家。根据用户问题和参考答案，生成一组结构化的
+  检查点（check_points），用于评测 Agent 回答的完整性。
+
+  生成原则：
+  1. 生成 3-6 个检查点，覆盖答案的关键信息
+  2. 每个检查点标注匹配模式：
+     - must_contain: 回答必须包含的关键事实（缺失则严重扣分）
+     - prefer_contain: 回答最好包含的补充信息（缺失则部分扣分）
+     - nice_to_have: 锦上添花的额外信息（缺失不扣分，包含则加分）
+  3. 每个检查点设置权重（0.1-1.0），must_contain 通常 0.8-1.0，
+     prefer_contain 通常 0.5-0.8，nice_to_have 通常 0.2-0.5
+  4. 对于发散型问题（如"你怎么看"、"有什么建议"），设置 divergent_ok=true
+  5. format 字段：如果问题要求 JSON 输出则设为 "json"，否则 "text"
+
+user_prompt_template: |
+  ## 用户问题
+  {query}
+
+  ## 参考答案
+  {gold_answer}
+
+  ## 任务
+  根据问题和参考答案，生成一组评测检查点。
+
+  以 JSON 格式输出：
+  {{
+    "check_points": [
+      {{
+        "point": "检查点描述",
+        "weight": 1.0,
+        "match": "must_contain"
+      }},
+      {{
+        "point": "检查点描述",
+        "weight": 0.7,
+        "match": "prefer_contain"
+      }},
+      {{
+        "point": "检查点描述",
+        "weight": 0.3,
+        "match": "nice_to_have"
+      }}
+    ],
+    "format": "text",
+    "divergent_ok": false,
+    "confidence": 0.0-1.0,
+    "reasoning": "检查点设计理由"
+  }}

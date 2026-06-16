@@ -34,9 +34,9 @@ class Settings(BaseSettings):
     AGENT_VERSION: str = "0.0.0"
 
     # 评测 LLM
-    LLM_MODEL: str = "gpt-4o"
+    LLM_MODEL: str = "qwen3.7-max"
     LLM_API_KEY: str = ""
-    LLM_BASE_URL: str = "https://api.openai.com/v1"
+    LLM_BASE_URL: str = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
     LLM_TEMPERATURE: float = 0.0
     LLM_MAX_RETRIES: int = 3
 

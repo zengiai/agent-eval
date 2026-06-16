@@ -22,7 +22,7 @@ class EvaluationOrchestrator:
 
     LLM Judge 集成：
       通过 config["llm"] 传入 LLM 配置 dict：
-        {"model": "gpt-4o", "api_key": "sk-xxx", "base_url": "...", ...}
+        {"model": "qwen3.7-max", "api_key": "sk-xxx", "base_url": "...", ...}
       引擎自动创建 LLMJudge 实例并通过 context 传递给各评测器。
     """
 
@@ -55,13 +55,13 @@ class EvaluationOrchestrator:
             try:
                 from backend.runner.llm_judge import LLMJudge
                 self._llm_judge = LLMJudge(
-                    model=llm_config.get("model", "gpt-4o"),
+                    model=llm_config.get("model", "qwen3.7-max"),
                     api_key=llm_config["api_key"],
-                    base_url=llm_config.get("base_url", "https://api.openai.com/v1"),
+                    base_url=llm_config.get("base_url", "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"),
                     temperature=llm_config.get("temperature", 0.0),
                     max_retries=llm_config.get("max_retries", 3),
                 )
-                logger.info("LLM Judge 已初始化: model=%s", llm_config.get("model", "gpt-4o"))
+                logger.info("LLM Judge 已初始化: model=%s", llm_config.get("model", "qwen3.7-max"))
             except Exception as e:
                 logger.warning("LLM Judge 初始化失败，LLM 维度将跳过: %s", e)
 

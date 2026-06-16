@@ -100,7 +100,7 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
 
         orchestrator = EvaluationOrchestrator(
             config={
-                "enabled_layers": ["intent", "retrieval", "tool", "generation", "outcome"],
+                "enabled_layers": ["generation"],
                 "llm": {
                     "model": settings.LLM_MODEL,
                     "api_key": settings.LLM_API_KEY,
@@ -169,6 +169,19 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
                     session.add(eval_score)
 
         await session.flush()
+
+        # 5. 回写 LLM 自动生成的 expected_snapshot
+        gen_result = results.get("generation")
+        if gen_result and gen_result.metrics.get("_enriched_expected") and eval_run:
+            enriched = dict(gen_result.metrics["_enriched_expected"])
+            # 清理内部标记字段，不污染持久化数据
+            enriched.pop("_enriched_expected", None)
+            enriched.pop("_annotation_source", None)
+            await session.execute(
+                update(EvalRun).where(EvalRun.id == eval_run.id).values(
+                    expected_snapshot=enriched,
+                )
+            )
 
         # 6. 回填 spans.score（仅前四层）
         for layer in ["intent", "retrieval", "tool", "generation"]:
