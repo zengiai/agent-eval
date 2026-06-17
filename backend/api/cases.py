@@ -1,5 +1,7 @@
 """评测用例 CRUD API + Trace→Case + 单 Case 评分。"""
 
+import asyncio
+import logging
 import uuid
 from datetime import datetime
 from typing import Optional, List
@@ -14,6 +16,8 @@ from backend.core.database import get_db
 from backend.core.models import (
     EvalCase, CaseSet, CaseSetMember, Trace, Span, EvalRun, EvalTask, EvalScore,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/api/cases", tags=["cases"])
 
@@ -55,6 +59,8 @@ class CaseResponse(BaseModel):
     last_avg_score: Optional[float] = None
     health_status: str
     is_active: bool
+    latest_run_status: Optional[str] = None
+    latest_run_id: Optional[str] = None
     metadata_: Optional[dict] = Field(None, alias="metadata")
     created_at: datetime
     updated_at: datetime
@@ -83,6 +89,14 @@ class EvaluateCaseResponse(BaseModel):
     error: Optional[str] = None
 
 
+class EvaluateCaseAsyncResponse(BaseModel):
+    case_id: str
+    run_id: str
+    task_id: str
+    trace_id: str
+    status: str  # "running"
+
+
 class TraceBrief(BaseModel):
     """Trace 简要信息，用于 Dashboard 列表。"""
     id: str
@@ -106,7 +120,11 @@ class TraceListResponse(BaseModel):
 # 辅助函数
 # ═══════════════════════════════════════════════════════════════
 
-def _case_to_response(c: EvalCase) -> CaseResponse:
+def _case_to_response(
+    c: EvalCase,
+    latest_run_status: Optional[str] = None,
+    latest_run_id: Optional[str] = None,
+) -> CaseResponse:
     return CaseResponse(
         id=str(c.id),
         query=c.query,
@@ -125,6 +143,8 @@ def _case_to_response(c: EvalCase) -> CaseResponse:
         last_avg_score=float(c.last_avg_score) if c.last_avg_score else None,
         health_status=c.health_status,
         is_active=c.is_active,
+        latest_run_status=latest_run_status,
+        latest_run_id=latest_run_id,
         metadata=c.metadata_,
         created_at=c.created_at,
         updated_at=c.updated_at,
@@ -172,9 +192,42 @@ async def list_cases(
     result = await db.execute(stmt)
     cases = result.scalars().all()
 
+    # 批量查询每个 Case 的最新 EvalRun 状态
+    case_ids = [c.id for c in cases]
+    run_status_map: dict = {}  # case_id → (status, run_id)
+    if case_ids:
+        # 子查询取每个 eval_case_id 的最新 created_at，再 JOIN 回主表
+        latest_run_sub = (
+            select(
+                EvalRun.eval_case_id,
+                func.max(EvalRun.created_at).label("max_created_at"),
+            )
+            .where(EvalRun.eval_case_id.in_(case_ids))
+            .group_by(EvalRun.eval_case_id)
+            .subquery()
+        )
+        latest_run_stmt = (
+            select(EvalRun.eval_case_id, EvalRun.status, EvalRun.id)
+            .join(
+                latest_run_sub,
+                (EvalRun.eval_case_id == latest_run_sub.c.eval_case_id)
+                & (EvalRun.created_at == latest_run_sub.c.max_created_at),
+            )
+        )
+        run_result = await db.execute(latest_run_stmt)
+        for row in run_result.all():
+            run_status_map[row[0]] = (row[1], str(row[2]))
+
     return CaseListResponse(
         total=total,
-        items=[_case_to_response(c) for c in cases],
+        items=[
+            _case_to_response(
+                c,
+                latest_run_status=run_status_map.get(c.id, (None, None))[0],
+                latest_run_id=run_status_map.get(c.id, (None, None))[1],
+            )
+            for c in cases
+        ],
     )
 
 
@@ -491,20 +544,89 @@ async def create_case_from_trace(
 
 
 # ═══════════════════════════════════════════════════════════════
-# 单 Case 评分
+# 单 Case 评分（异步）
 # ═══════════════════════════════════════════════════════════════
 
-@router.post("/{case_id}/evaluate", response_model=EvaluateCaseResponse)
+
+async def _run_evaluation_background(
+    trace_id: str,
+    eval_run_id: str,
+    case_id: str,
+    task_id: str,
+) -> None:
+    """后台执行评测 + 更新 Case 统计。
+
+    与 HTTP 请求生命周期完全解耦，使用独立 session。
+    """
+    try:
+        from backend.workers.eval_worker import evaluate_trace
+
+        result = await evaluate_trace(trace_id, eval_run_id)
+
+        # 更新 EvalCase 的 run_count 和 last_avg_score
+        from backend.core.database import async_session_factory
+
+        async with async_session_factory() as update_session:
+            stmt = (
+                update(EvalCase)
+                .where(EvalCase.id == uuid.UUID(case_id))
+                .values(
+                    run_count=func.coalesce(EvalCase.run_count, 0) + 1,
+                    last_avg_score=result.get("overall_score"),
+                    updated_at=datetime.utcnow(),
+                )
+            )
+            await update_session.execute(stmt)
+
+            # 更新 EvalTask 为 completed
+            await update_session.execute(
+                update(EvalTask)
+                .where(EvalTask.id == uuid.UUID(task_id))
+                .values(
+                    status="completed",
+                    completed_cases=1,
+                    completed_at=datetime.utcnow(),
+                )
+            )
+            await update_session.commit()
+
+    except Exception as e:
+        logger.exception("后台评测失败: trace=%s run=%s", trace_id, eval_run_id)
+        from backend.core.database import async_session_factory
+
+        async with async_session_factory() as cleanup_session:
+            await cleanup_session.execute(
+                update(EvalRun)
+                .where(EvalRun.id == uuid.UUID(eval_run_id))
+                .values(
+                    status="failed",
+                    error_message=str(e)[:500],
+                    completed_at=datetime.utcnow(),
+                )
+            )
+            await cleanup_session.execute(
+                update(EvalTask)
+                .where(EvalTask.id == uuid.UUID(task_id))
+                .values(
+                    status="failed",
+                    failed_cases=1,
+                    completed_at=datetime.utcnow(),
+                )
+            )
+            await cleanup_session.commit()
+
+
+@router.post("/{case_id}/evaluate", response_model=EvaluateCaseAsyncResponse, status_code=202)
 async def evaluate_case(case_id: str, db: AsyncSession = Depends(get_db)):
-    """对单个 Case 执行评测。
+    """对单个 Case 执行评测（异步）。
 
     前提：该 Case 必须有关联的 source_trace_id（即从 Trace 创建）。
     流程：
     1. 加载 Case → 获取 expected 标注
     2. 加载关联 Trace + Spans
-    3. 创建/复用 EvalRun，写入 expected_snapshot
-    4. 调用评测引擎执行五层打分
-    5. 写入 eval_scores 并回填 spans.score / traces.overall_score
+    3. 创建 EvalRun，写入 expected_snapshot
+    4. 通过 asyncio.create_task 在后台启动评测引擎
+    5. 立即返回 run_id + status="running"
     """
     case_uuid = uuid.UUID(case_id)
     case = await db.get(EvalCase, case_uuid)
@@ -550,6 +672,7 @@ async def evaluate_case(case_id: str, db: AsyncSession = Depends(get_db)):
         trace_id=trace.id,
         expected_snapshot=expected_snapshot,
         status="running",
+        started_at=datetime.utcnow(),
     )
     db.add(eval_run)
     await db.flush()
@@ -557,54 +680,23 @@ async def evaluate_case(case_id: str, db: AsyncSession = Depends(get_db)):
     # 先提交 EvalRun，使 evaluate_trace（独立 session）可见
     await db.commit()
 
-    # 调用评测引擎
-    try:
-        from backend.workers.eval_worker import evaluate_trace
-        result = await evaluate_trace(str(trace.id), str(eval_run.id))
-
-        # 更新 case 的 run_count 和 last_avg_score
-        from backend.core.database import async_session_factory
-        async with async_session_factory() as update_session:
-            stmt = (
-                update(EvalCase)
-                .where(EvalCase.id == case_uuid)
-                .values(
-                    run_count=func.coalesce(EvalCase.run_count, 0) + 1,
-                    last_avg_score=result.get("overall_score"),
-                    updated_at=datetime.utcnow(),
-                )
-            )
-            await update_session.execute(stmt)
-            await update_session.commit()
-
-        return EvaluateCaseResponse(
-            case_id=str(case.id),
+    # 在后台启动评测任务（不阻塞 HTTP 响应）
+    asyncio.create_task(
+        _run_evaluation_background(
             trace_id=str(trace.id),
-            overall_score=result.get("overall_score"),
-            layers=result.get("layers"),
-            error=result.get("error"),
-        )
-    except Exception as e:
-        # 评分失败，将 EvalRun 标记为 failed
-        from backend.core.database import async_session_factory
-        async with async_session_factory() as cleanup_session:
-            await cleanup_session.execute(
-                update(EvalRun)
-                .where(EvalRun.id == eval_run.id)
-                .values(status="failed", error_message=str(e)[:500])
-            )
-            await cleanup_session.execute(
-                update(EvalTask)
-                .where(EvalTask.id == task.id)
-                .values(status="failed")
-            )
-            await cleanup_session.commit()
-
-        return EvaluateCaseResponse(
+            eval_run_id=str(eval_run.id),
             case_id=str(case.id),
-            trace_id=str(trace.id),
-            error=str(e),
+            task_id=str(task.id),
         )
+    )
+
+    return EvaluateCaseAsyncResponse(
+        case_id=str(case.id),
+        run_id=str(eval_run.id),
+        task_id=str(task.id),
+        trace_id=str(trace.id),
+        status="running",
+    )
 
 
 # ═══════════════════════════════════════════════════════════════

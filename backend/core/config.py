@@ -45,10 +45,29 @@ class Settings(BaseSettings):
     SAMPLING_DAILY_LIMIT: int = 100
     SAMPLING_RATIO: float = 0.05
 
+    # ---- 7×24 Agent ----
+
+    # Telegram Gateway
+    TELEGRAM_BOT_TOKEN: str = ""
+    TELEGRAM_MODE: str = "polling"        # polling | webhook
+    TELEGRAM_ALLOWED_USERS: str = ""       # 逗号分隔的用户 ID 或 username
+    TELEGRAM_PROXY: str = ""               # HTTP 代理（可选）
+
+    # Dispatcher（预留）
+    DISPATCHER_MODEL: str = "qwen3.7-max"
+    DISPATCHER_MAX_HISTORY: int = 10
+
     model_config = {
         "env_file": str(Path(__file__).resolve().parent.parent / ".env"),
         "extra": "ignore",
     }
+
+    @property
+    def telegram_allowed_users_set(self) -> set[str]:
+        """解析逗号分隔的白名单为 set。"""
+        if not self.TELEGRAM_ALLOWED_USERS.strip():
+            return set()
+        return {u.strip() for u in self.TELEGRAM_ALLOWED_USERS.split(",") if u.strip()}
 
 
 settings = Settings()

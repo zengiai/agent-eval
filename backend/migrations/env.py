@@ -8,6 +8,7 @@ from sqlalchemy import engine_from_config, pool
 from backend.core.config import settings
 from backend.core.database import Base
 from backend.core.models import *  # noqa: F401, F403 — 确保所有表注册到 Base.metadata
+from backend.agent.scheduler.models import *  # noqa: F401, F403 — 注册 agent_jobs / agent_job_executions
 
 config = context.config
 config.set_main_option("sqlalchemy.url", settings.DATABASE_URL_SYNC)

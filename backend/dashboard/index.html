@@ -65,6 +65,10 @@
   .badge-trace { background: #ede9fe; color: #6b21a8; }
   .badge-manual { background: #e0e7ff; color: #3730a3; }
   .badge-llm { background: #fce7f3; color: #9d174d; }
+  .badge-running { background: #fef3c7; color: #92400e; animation: pulse 1.5s infinite; }
+  .badge-completed { background: #d1fae5; color: #065f46; }
+  .badge-failed { background: #fee2e2; color: #991b1b; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .6; } }
 
   .score-cell { font-weight: 700; font-size: 15px; }
   .score-high { color: var(--success); }
@@ -244,8 +248,8 @@
     </div>
     <div class="card">
       <table>
-        <thead><tr><th>Query</th><th>来源</th><th>难度</th><th>分类</th><th>最近均分</th><th>执行次数</th><th>状态</th><th>操作</th></tr></thead>
-        <tbody id="case-tbody"><tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无数据</td></tr></tbody>
+        <thead><tr><th>Query</th><th>来源</th><th>难度</th><th>分类</th><th>最近均分</th><th>执行次数</th><th>评测</th><th>状态</th><th>操作</th></tr></thead>
+        <tbody id="case-tbody"><tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无数据</td></tr></tbody>
       </table>
     </div>
     <div class="pagination" id="case-pagination"></div>
@@ -818,34 +822,53 @@ async function loadCases(page = 0) {
 function renderCases(data) {
   const tbody = $('#case-tbody');
   if (!data.items.length) {
-    tbody.innerHTML = '<tr><td colspan="8" class="empty-state"><div class="icon">📋</div>暂无用例</td></tr>';
+    tbody.innerHTML = '<tr><td colspan="9" class="empty-state"><div class="icon">📋</div>暂无用例</td></tr>';
     return;
   }
-  tbody.innerHTML = data.items.map(c => `
-    <tr>
+  tbody.innerHTML = data.items.map(c => {
+    const runStatusBadge = runStatusBadgeHtml(c.latest_run_status);
+    return `
+    <tr data-case-id="${c.id}" data-run-status="${c.latest_run_status || ''}">
       <td class="query" title="${escapeHtml(c.query)}">${escapeHtml(c.query)}</td>
       <td>${caseSourceBadge(c.source)}</td>
       <td>${c.difficulty}</td>
       <td>${c.category || '-'}</td>
-      <td class="score-cell"><span class="${scoreClass(c.last_avg_score||0)}">${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</span></td>
-      <td>${c.run_count}</td>
+      <td data-field="score"><span class="${scoreClass(c.last_avg_score||0)}">${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</span></td>
+      <td data-field="run_count">${c.run_count}</td>
+      <td data-field="run_status">${runStatusBadge}</td>
       <td><span class="badge ${c.is_active?'badge-success':'badge-error'}">${c.health_status}</span></td>
-      <td style="display:flex;gap:6px;">
+      <td style="display:flex;gap:6px;" data-field="actions">
         ${c.source_trace_id
           ? `<button class="btn btn-outline btn-sm" onclick="viewTraceDetail('${c.source_trace_id}')">详情</button>`
           : `<button class="btn btn-outline btn-sm" onclick="viewCaseDetail('${c.id}')">详情</button>`}
         ${c.source_trace_id
-          ? `<button class="btn btn-success btn-sm" onclick="evaluateCase('${c.id}')">▶ 评分</button>`
+          ? (c.latest_run_status === 'running'
+              ? `<button class="btn btn-outline btn-sm" disabled><span class="spinner"></span> 评测中</button>`
+              : `<button class="btn btn-success btn-sm" onclick="evaluateCase('${c.id}')">▶ 评分</button>`)
           : '<button class="btn btn-outline btn-sm" disabled title="该 Case 无关联 Trace">无Trace</button>'}
       </td>
-    </tr>
-  `).join('');
+    </tr>`;
+  }).join('');
 
   const pag = $('#case-pagination');
   pag.innerHTML = `
     <button class="btn btn-outline btn-sm" onclick="loadCases(${Math.max(0, casePage-1)})" ${casePage===0?'disabled':''}>上一页</button>
     <span>第 ${casePage+1} 页 / 共 ${Math.ceil(data.total/20)} 页（${data.total} 条）</span>
     <button class="btn btn-outline btn-sm" onclick="loadCases(${casePage+1})" ${(casePage+1)*20>=data.total?'disabled':''}>下一页</button>`;
+
+  // 检查是否有 running 状态的 Case，自动启动轮询
+  const hasRunning = data.items.some(c => c.latest_run_status === 'running');
+  if (hasRunning) {
+    startPolling();
+  }
+}
+
+// ── 评测状态 badge HTML ──
+function runStatusBadgeHtml(status) {
+  if (status === 'running') return '<span class="badge badge-running"><span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle;margin-right:3px;"></span>评测中</span>';
+  if (status === 'completed') return '<span class="badge badge-completed">✓ 完成</span>';
+  if (status === 'failed') return '<span class="badge badge-failed">✗ 失败</span>';
+  return '<span style="color:var(--text-secondary);">-</span>';
 }
 
 async function viewCaseDetail(caseId) {
@@ -872,47 +895,143 @@ async function viewCaseDetail(caseId) {
 
 async function evaluateCase(caseId) {
   const btn = event.target;
-  const orig = btn.textContent;
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>';
+  btn.innerHTML = '<span class="spinner"></span> 评测中';
 
   try {
     const res = await fetch(`${API_BASE}/cases/${caseId}/evaluate`, { method: 'POST' });
     const data = await res.json();
-    if (data.error) { showToast('❌ ' + data.error, 'error'); return; }
+    if (data.error) { showToast('❌ ' + data.error, 'error'); btn.disabled = false; btn.textContent = '▶ 评分'; return; }
 
-    const layerNames = {intent:'意图',retrieval:'检索',tool:'工具',generation:'生成',outcome:'结果'};
-    const layersHtml = data.layers ? Object.entries(data.layers).map(([k,v]) => {
-      const dimsHtml = v.metrics ? Object.entries(v.metrics)
-        .filter(([dk]) => !dk.startsWith('_'))
-        .map(([dk, dv]) => {
-          if (typeof dv === 'object' && dv !== null && 'score' in dv) {
-            const dimClr = dv.score >= 80 ? 'score-high' : dv.score >= 50 ? 'score-mid' : 'score-low';
-            const skipped = dv.skipped ? ' ⏭️' : '';
-            const methodTag = dv.method ? ` <span class="badge badge-llm" style="font-size:10px;">${dv.method}</span>` : '';
-            return `<tr><td style="padding:2px 16px;font-size:12px;color:#6b7280;">↳ ${dk}${skipped}${methodTag}</td><td class="score-cell" style="font-size:13px;"><span class="${dimClr}">${dv.score.toFixed(1)}</span></td></tr>`;
-          }
-          return '';
-        }).join('') : '';
-      const lsc = v.total_score || 0;
-      const lClr = lsc >= 80 ? 'score-high' : lsc >= 50 ? 'score-mid' : 'score-low';
-      return `<tr><td style="font-weight:600;">${layerNames[k]||k}</td><td class="score-cell"><span class="${lClr}">${lsc.toFixed(1)}</span></td></tr>${dimsHtml}`;
-    }).join('') : '';
+    // 异步模式：立即显示提示，更新当前行的评测状态
+    showToast('评测已提交，正在后台执行...', 'success');
 
-    openSlidePanel('✅ 评分完成', `
-      <h4 style="margin-bottom:4px;">综合得分: <span class="${scoreClass(data.overall_score||0)}" style="font-size:28px;">${data.overall_score?.toFixed(1) || '-'}</span></h4>
-      <p style="color:var(--text-secondary);font-size:12px;margin-bottom:12px;">Trace: <code>${data.trace_id}</code></p>
-      ${layersHtml ? `<table style="width:100%;margin-top:8px;"><thead><tr><th style="text-align:left;">评测层</th><th style="text-align:left;">得分</th></tr></thead><tbody>${layersHtml}</tbody></table>` : ''}
-      <div style="margin-top:14px;text-align:right;">
-        <button class="btn btn-outline btn-sm" onclick="viewCaseScores('${caseId}')">📊 查看评分历史</button>
-      </div>
-    `);
-    loadCases(casePage);
+    // 直接更新当前行的 DOM（无感）
+    const row = document.querySelector(`tr[data-case-id="${caseId}"]`);
+    if (row) {
+      row.dataset.runStatus = 'running';
+      const statusCell = row.querySelector('td[data-field="run_status"]');
+      if (statusCell) statusCell.innerHTML = runStatusBadgeHtml('running');
+      // 更新按钮为 disabled 状态
+      const actionsCell = row.querySelector('td[data-field="actions"]');
+      if (actionsCell) {
+        const evalBtn = actionsCell.querySelector('.btn-success, .btn-outline');
+        if (evalBtn && evalBtn.textContent.includes('评测中')) {
+          // 已经是评测中状态
+        } else if (evalBtn) {
+          evalBtn.disabled = true;
+          evalBtn.className = 'btn btn-outline btn-sm';
+          evalBtn.innerHTML = '<span class="spinner"></span> 评测中';
+        }
+      }
+    }
+
+    // 启动轮询
+    startPolling();
+
   } catch(e) {
-    showToast('❌ 评分失败: ' + e.message, 'error');
-  } finally {
+    showToast('❌ 评分请求失败: ' + e.message, 'error');
     btn.disabled = false;
-    btn.textContent = orig;
+    btn.textContent = '▶ 评分';
+  }
+}
+
+// ═══ 无感轮询机制 ═══
+let _pollTimer = null;
+let _isPolling = false;
+
+function startPolling() {
+  if (_pollTimer) return; // 已在轮询中
+  _pollTimer = setInterval(pollCasesDiff, 5000);
+}
+
+function stopPolling() {
+  if (_pollTimer) {
+    clearInterval(_pollTimer);
+    _pollTimer = null;
+  }
+  _isPolling = false;
+}
+
+async function pollCasesDiff() {
+  if (_isPolling) return; // 防止重入
+  _isPolling = true;
+
+  try {
+    // 构建与当前页面相同的查询参数
+    const params = new URLSearchParams();
+    const search = $('#case-search').value;
+    if (search) params.set('search', search);
+    const source = $('#case-source').value;
+    if (source) params.set('source', source);
+    const difficulty = $('#case-difficulty').value;
+    if (difficulty) params.set('difficulty', difficulty);
+    params.set('limit', '20');
+    params.set('offset', String(casePage * 20));
+
+    const res = await fetch(`${API_BASE}/cases?${params}`);
+    const data = await res.json();
+
+    let hasRunning = false;
+
+    // 遍历返回的 items，与当前 DOM 逐行比对
+    for (const c of data.items) {
+      const row = document.querySelector(`tr[data-case-id="${c.id}"]`);
+      if (!row) continue;
+
+      const oldStatus = row.dataset.runStatus || '';
+      const newStatus = c.latest_run_status || '';
+
+      if (oldStatus === newStatus) {
+        if (newStatus === 'running') hasRunning = true;
+        continue;
+      }
+
+      // 状态发生变化 → 定向更新该行
+      row.dataset.runStatus = newStatus;
+
+      // 更新"评测"列 badge
+      const statusCell = row.querySelector('td[data-field="run_status"]');
+      if (statusCell) statusCell.innerHTML = runStatusBadgeHtml(newStatus);
+
+      // 更新"最近均分"列
+      if (c.last_avg_score != null) {
+        const scoreCell = row.querySelector('td[data-field="score"]');
+        if (scoreCell) scoreCell.innerHTML = `<span class="${scoreClass(c.last_avg_score)}">${c.last_avg_score.toFixed(1)}</span>`;
+      }
+
+      // 更新"执行次数"列
+      const runCountCell = row.querySelector('td[data-field="run_count"]');
+      if (runCountCell) runCountCell.textContent = c.run_count;
+
+      // 更新操作列按钮
+      const actionsCell = row.querySelector('td[data-field="actions"]');
+      if (actionsCell && newStatus !== 'running') {
+        const evalBtn = actionsCell.querySelector('button[disabled]');
+        if (evalBtn && evalBtn.textContent.includes('评测中')) {
+          evalBtn.disabled = false;
+          evalBtn.className = 'btn btn-success btn-sm';
+          evalBtn.textContent = '▶ 评分';
+        }
+      }
+
+      if (newStatus === 'completed') {
+        showToast('Case 评测完成', 'success');
+      } else if (newStatus === 'failed') {
+        showToast('Case 评测失败', 'error');
+      } else if (newStatus === 'running') {
+        hasRunning = true;
+      }
+    }
+
+    // 如果当前页没有 running 状态的 Case，停止轮询
+    if (!hasRunning) {
+      stopPolling();
+    }
+  } catch(e) {
+    console.warn('Polling failed:', e);
+  } finally {
+    _isPolling = false;
   }
 }
 

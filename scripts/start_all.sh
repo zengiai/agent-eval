@@ -1,6 +1,6 @@
 #!/bin/bash
 # ═══════════════════════════════════════════════════════════════════════════
-# 一键启动：example_agent + eval 后端 + 对话界面 + 看板
+# 一键启动：example_agent + eval 后端 + 对话界面 + 看板 + Agent Runtime
 #
 # 用法:
 #   bash scripts/start_all.sh                     # 默认端口
@@ -21,6 +21,9 @@ NC='\033[0m'
 # ── 路径 ──────────────────────────────────────────────────────────────
 PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 PID_DIR="/tmp/agent-eval"
+LOG_DIR="$PROJECT_ROOT/logs"
+ENV_FILE="$PROJECT_ROOT/backend/.env"
+AGENT_RUNTIME_READY_FILE="$PID_DIR/agent_runtime.ready"
 
 # ── 端口 ──────────────────────────────────────────────────────────────
 AGENT_PORT="${AGENT_PORT:-8800}"       # 对话界面 + 看板
@@ -34,8 +37,21 @@ warn()   { echo -e "       ${YELLOW}⚠️${NC}  $1"; }
 fail()   { echo -e "       ${RED}❌${NC} $1"; }
 info()   { echo -e "       ${CYAN}ℹ${NC}  $1"; }
 
+load_env_file() {
+    if [ -f "$ENV_FILE" ]; then
+        set -a
+        # shellcheck disable=SC1090
+        . "$ENV_FILE"
+        set +a
+        ok "已加载环境配置: $ENV_FILE"
+    else
+        warn "未找到环境配置文件: $ENV_FILE"
+    fi
+}
+
 # ── 确保 PID 目录 ────────────────────────────────────────────────────
 mkdir -p "$PID_DIR"
+mkdir -p "$LOG_DIR"
 
 # ═══════════════════════════════════════════════════════════════════════════
 # 停止
@@ -43,7 +59,7 @@ mkdir -p "$PID_DIR"
 stop_all() {
     echo -e "${YELLOW}正在停止所有服务...${NC}"
 
-    for svc in agent_server eval_api; do
+    for svc in agent_server eval_api agent_runtime; do
         pid_file="$PID_DIR/${svc}.pid"
         if [ -f "$pid_file" ]; then
             pid=$(cat "$pid_file")
@@ -67,6 +83,8 @@ stop_all() {
     # 清理残留进程
     pkill -f "agent_server.py" 2>/dev/null || true
     pkill -f "uvicorn backend.api:app" 2>/dev/null || true
+    pkill -f "python -m backend.agent.runtime" 2>/dev/null || true
+    rm -f "$AGENT_RUNTIME_READY_FILE"
 
     echo -e "${GREEN}所有服务已停止。${NC}"
 }
@@ -95,6 +113,7 @@ status_all() {
 
     check_svc "agent_server"
     check_svc "eval_api"
+    check_svc "agent_runtime"
     echo ""
 
     # 端口检查
@@ -122,7 +141,7 @@ start_all() {
     echo ""
 
     # ── 1. 检查 & 启动 Docker 基础设施 ──────────────────────────────
-    log "1/4 检查基础设施 (PostgreSQL + Redis)..."
+    log "1/7 检查基础设施 (PostgreSQL + Redis)..."
 
     # 检查 docker 是否可用
     if ! command -v docker &>/dev/null; then
@@ -148,7 +167,8 @@ start_all() {
     fi
 
     # ── 2. 设置环境变量 ──────────────────────────────────────────────
-    log "2/4 配置环境变量..."
+    log "2/7 配置环境变量..."
+    load_env_file
 
     # 优先使用已有的 DATABASE_URL，否则根据 docker-compose 设置默认值
     if [ -z "$DATABASE_URL" ]; then
@@ -160,8 +180,17 @@ start_all() {
     info "DATABASE_URL = $DATABASE_URL"
     info "REDIS_URL    = $REDIS_URL"
 
-    # ── 3. 终止旧服务 ──────────────────────────────────────────────
-    log "3/5 检查并终止旧服务..."
+    # ── 3. Agent Runtime 配置预检 ─────────────────────────────────
+    log "3/7 检查 Agent Runtime 配置..."
+    if python -m backend.agent.runtime --check-config > "$LOG_DIR/agent_runtime.log" 2>&1; then
+        ok "Agent Runtime 配置检查通过"
+    else
+        fail "Agent Runtime 配置检查失败，查看日志: tail $LOG_DIR/agent_runtime.log"
+        exit 1
+    fi
+
+    # ── 4. 终止旧服务 ──────────────────────────────────────────────
+    log "4/7 检查并终止旧服务..."
 
     kill_old_on_port() {
         local port="$1" name="$2"
@@ -180,7 +209,7 @@ start_all() {
     }
 
     # 先通过 PID 文件尝试精确停止
-    for svc in agent_server eval_api; do
+    for svc in agent_server eval_api agent_runtime; do
         pid_file="$PID_DIR/${svc}.pid"
         if [ -f "$pid_file" ]; then
             pid=$(cat "$pid_file")
@@ -197,9 +226,11 @@ start_all() {
     # 再通过端口兜底清理
     kill_old_on_port "$EVAL_PORT"  "eval_api"
     kill_old_on_port "$AGENT_PORT" "agent_server"
+    pkill -f "python -m backend.agent.runtime" 2>/dev/null || true
+    rm -f "$AGENT_RUNTIME_READY_FILE"
 
-    # ── 4. 启动评测后端 API ──────────────────────────────────────────
-    log "4/5 启动评测后端 API (端口 $EVAL_PORT)..."
+    # ── 5. 启动评测后端 API ──────────────────────────────────────────
+    log "5/7 启动评测后端 API (端口 $EVAL_PORT)..."
 
     nohup python -m uvicorn backend.api:app \
         --host 0.0.0.0 \
@@ -207,7 +238,7 @@ start_all() {
         --log-level info \
         --no-access-log \
         --reload \
-        > "$PROJECT_ROOT/logs/eval_api.log" 2>&1 &
+        > "$LOG_DIR/eval_api.log" 2>&1 &
     EVAL_PID=$!
     echo $EVAL_PID > "$PID_DIR/eval_api.pid"
 
@@ -220,12 +251,12 @@ start_all() {
         sleep 0.5
     done
     if ! kill -0 "$EVAL_PID" 2>/dev/null; then
-        fail "评测后端启动失败，查看日志: tail $PROJECT_ROOT/logs/eval_api.log"
+        fail "评测后端启动失败，查看日志: tail $LOG_DIR/eval_api.log"
         exit 1
     fi
 
-    # ── 5. 启动 Agent Server（对话界面 + 看板）──────────────────────
-    log "5/5 启动 Agent Server - 对话界面 + 看板 (端口 $AGENT_PORT)..."
+    # ── 6. 启动 Agent Server（对话界面 + 看板）──────────────────────
+    log "6/7 启动 Agent Server - 对话界面 + 看板 (端口 $AGENT_PORT)..."
 
     rm -f "$PID_DIR/agent_server.pid"
 
@@ -235,7 +266,7 @@ start_all() {
         --log-level info \
         --no-access-log \
         --reload \
-        > "$PROJECT_ROOT/logs/agent_server.log" 2>&1 &
+        > "$LOG_DIR/agent_server.log" 2>&1 &
     AGENT_PID=$!
     echo $AGENT_PID > "$PID_DIR/agent_server.pid"
 
@@ -248,7 +279,35 @@ start_all() {
         sleep 0.5
     done
     if ! kill -0 "$AGENT_PID" 2>/dev/null; then
-        fail "Agent Server 启动失败，查看日志: tail $PROJECT_ROOT/logs/agent_server.log"
+        fail "Agent Server 启动失败，查看日志: tail $LOG_DIR/agent_server.log"
+        exit 1
+    fi
+
+    # ── 7. 启动 Agent Runtime（Gateway + Scheduler）────────────────
+    log "7/7 启动 Agent Runtime - Gateway + Scheduler..."
+
+    rm -f "$PID_DIR/agent_runtime.pid" "$AGENT_RUNTIME_READY_FILE"
+
+    AGENT_RUNTIME_READY_FILE="$AGENT_RUNTIME_READY_FILE" \
+    nohup python -m backend.agent.runtime \
+        > "$LOG_DIR/agent_runtime.log" 2>&1 &
+    RUNTIME_PID=$!
+    echo $RUNTIME_PID > "$PID_DIR/agent_runtime.pid"
+
+    # 等待 Gateway + Scheduler 完成初始化
+    for i in $(seq 1 30); do
+        if [ -f "$AGENT_RUNTIME_READY_FILE" ]; then
+            ok "Agent Runtime 就绪 (PID=$RUNTIME_PID)"
+            break
+        fi
+        if ! kill -0 "$RUNTIME_PID" 2>/dev/null; then
+            fail "Agent Runtime 启动失败，查看日志: tail $LOG_DIR/agent_runtime.log"
+            exit 1
+        fi
+        sleep 0.5
+    done
+    if [ ! -f "$AGENT_RUNTIME_READY_FILE" ]; then
+        fail "Agent Runtime 未在预期时间内就绪，查看日志: tail $LOG_DIR/agent_runtime.log"
         exit 1
     fi
 
@@ -265,8 +324,9 @@ start_all() {
     echo -e "     http://localhost:${EVAL_PORT}/health"
     echo ""
     echo -e "  ${CYAN}📋 日志文件:${NC}"
-    echo -e "     Agent Server:  tail -f $PROJECT_ROOT/logs/agent_server.log"
-    echo -e "     Eval API:      tail -f $PROJECT_ROOT/logs/eval_api.log"
+    echo -e "     Agent Server:   tail -f $LOG_DIR/agent_server.log"
+    echo -e "     Eval API:       tail -f $LOG_DIR/eval_api.log"
+    echo -e "     Agent Runtime:  tail -f $LOG_DIR/agent_runtime.log"
     echo ""
     echo -e "  ${CYAN}🔧 管理命令:${NC}"
     echo -e "     停止服务:      bash scripts/start_all.sh --stop"

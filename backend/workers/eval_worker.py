@@ -3,8 +3,10 @@
 在 Ingest 消费完一条 Trace 的所有 Span 后触发，调用编排器执行五层评测。
 """
 
+import asyncio
 import json
 import logging
+from datetime import datetime
 from uuid import UUID
 from typing import Dict, Any
 
@@ -52,14 +54,19 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
         )
         spans = result.scalars().all()
 
-        # 加载关联的 EvalRun（取最新一条，因为每次评分都创建新的）
-        result = await session.execute(
-            select(EvalRun)
-            .where(EvalRun.trace_id == UUID(trace_id))
-            .order_by(desc(EvalRun.created_at))
-            .limit(1)
-        )
-        eval_run = result.scalar_one_or_none()
+        # 加载关联的 EvalRun（优先通过 eval_run_id 精确查询，避免并发场景取错）
+        eval_run = None
+        if eval_run_id:
+            eval_run = await session.get(EvalRun, UUID(eval_run_id))
+        if not eval_run:
+            # 兜底：取该 trace 最新一条
+            result = await session.execute(
+                select(EvalRun)
+                .where(EvalRun.trace_id == UUID(trace_id))
+                .order_by(desc(EvalRun.created_at))
+                .limit(1)
+            )
+            eval_run = result.scalar_one_or_none()
 
         # 2. 准备期望值
         expected_snapshot = {}
@@ -110,7 +117,9 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
                 },
             }
         )
-        results = orchestrator.run(trace_dict, expected_snapshot)
+        # 将同步阻塞的 orchestrator.run() 放入线程池执行，避免阻塞事件循环
+        loop = asyncio.get_event_loop()
+        results = await loop.run_in_executor(None, orchestrator.run, trace_dict, expected_snapshot)
 
         # 4. 写入 eval_scores（不再删除旧分数，通过 eval_run_id 隔离多轮评分）
         span_map = {s.span_type: s for s in spans}
@@ -208,6 +217,7 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
             await session.execute(
                 update(EvalRun).where(EvalRun.id == eval_run.id).values(
                     status="completed",
+                    completed_at=datetime.utcnow(),
                 )
             )
 
