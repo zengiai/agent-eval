@@ -27,12 +27,14 @@ def test_runtime_config_accepts_polling(monkeypatch):
     monkeypatch.setattr(runtime.settings, "TELEGRAM_BOT_TOKEN", "dummy")
     monkeypatch.setattr(runtime.settings, "TELEGRAM_ALLOWED_USERS", "123,456")
     monkeypatch.setattr(runtime.settings, "TELEGRAM_MODE", "polling")
+    monkeypatch.setattr(runtime.settings, "TELEGRAM_REPLY_REACTION", "👌")
 
     config = runtime.RuntimeConfig.from_settings()
 
     assert config.telegram_bot_token == "dummy"
     assert config.telegram_allowed_users == {"123", "456"}
     assert config.telegram_mode == "polling"
+    assert config.telegram_reply_reaction == "👌"
 
 
 def test_runtime_config_rejects_non_polling_mode(monkeypatch):
@@ -67,9 +69,11 @@ async def test_run_runtime_startup_chain(monkeypatch, tmp_path):
     class FakeGateway:
         platform_name = "telegram"
 
-        def __init__(self, token, allowed_users, proxy=None):
+        def __init__(self, token, allowed_users, proxy=None, reply_reaction=None):
             events.append("gateway:init")
+            events.append(f"gateway:reaction:{reply_reaction}")
             self._handler = None
+            self.reply_reaction = reply_reaction
 
         def on_message(self, handler):
             events.append("gateway:on_message")
@@ -109,6 +113,7 @@ async def test_run_runtime_startup_chain(monkeypatch, tmp_path):
         telegram_mode="polling",
         telegram_allowed_users={"Zakiai6"},
         telegram_proxy=None,
+        telegram_reply_reaction="🤔",
         dispatcher_model="qwen3.7-max",
         llm_api_key="",
         llm_base_url="https://example.invalid",
@@ -121,6 +126,7 @@ async def test_run_runtime_startup_chain(monkeypatch, tmp_path):
 
     assert events == [
         "gateway:init",
+        "gateway:reaction:🤔",
         "gateway:on_message",
         "scheduler:set_context",
         "scheduler:start",

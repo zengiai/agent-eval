@@ -58,6 +58,7 @@ class CommandExecutor:
             user_id=msg.user_id,
             chat_id=msg.chat_id,
             username=msg.username,
+            api_base_url="http://localhost:18000",
         ))
         self._max_history = max_history
 

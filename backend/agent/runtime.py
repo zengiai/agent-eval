@@ -43,6 +43,7 @@ class RuntimeConfig:
     telegram_mode: str
     telegram_allowed_users: set[str]
     telegram_proxy: Optional[str]
+    telegram_reply_reaction: str
     dispatcher_model: str
     llm_api_key: str
     llm_base_url: str
@@ -72,6 +73,7 @@ class RuntimeConfig:
             telegram_mode=mode,
             telegram_allowed_users=allowed_users,
             telegram_proxy=settings.TELEGRAM_PROXY.strip() or None,
+            telegram_reply_reaction=settings.TELEGRAM_REPLY_REACTION.strip(),
             dispatcher_model=settings.DISPATCHER_MODEL,
             llm_api_key=settings.LLM_API_KEY,
             llm_base_url=settings.LLM_BASE_URL,
@@ -147,7 +149,7 @@ def build_brain(
             user_id=msg.user_id,
             chat_id=msg.chat_id,
             username=msg.username,
-            db_session_factory=async_session_factory,
+            api_base_url="http://localhost:18000",
             scheduler=scheduler,
             gateway=gateway,
             llm_config={
@@ -187,6 +189,7 @@ async def run_runtime(
         token=config.telegram_bot_token,
         allowed_users=config.telegram_allowed_users,
         proxy=config.telegram_proxy,
+        reply_reaction=config.telegram_reply_reaction,
     )
     scheduler = build_scheduler()
     brain = build_brain(config, scheduler, gateway)

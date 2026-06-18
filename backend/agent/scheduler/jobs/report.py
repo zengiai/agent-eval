@@ -1,4 +1,8 @@
-"""报告生成任务。"""
+"""报告生成任务。
+
+TODO(BrainAPIGatewayRefactor): 此 Job 仍直连数据库查询 Trace/EvalScore 统计，
+应在后续迭代中改为通过 EvalAPIClient 调用 eval-api 获取数据。
+"""
 
 import logging
 from datetime import datetime, timedelta, timezone

@@ -3,7 +3,7 @@
 import asyncio
 import logging
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from typing import Optional, List
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -309,12 +309,15 @@ async def list_traces_for_case_conversion(
     source: Optional[str] = None,
     status: Optional[str] = None,
     search: Optional[str] = Query(None, description="搜索 query 关键词"),
+    min_score: Optional[float] = Query(None, description="总分下限（0-100）"),
+    max_score: Optional[float] = Query(None, description="总分上限（0-100）"),
+    agent_version: Optional[str] = Query(None, description="Agent 版本号"),
     only_without_case: bool = Query(False, description="仅显示未转 Case 的 Trace"),
     limit: int = 50,
     offset: int = 0,
     db: AsyncSession = Depends(get_db),
 ):
-    """查询 Trace 列表（Dashboard 用），标注是否已转为 Case。"""
+    """查询 Trace 列表（Dashboard + Brain search_traces 共用），标注是否已转为 Case。"""
     stmt = select(Trace)
 
     if source:
@@ -323,6 +326,12 @@ async def list_traces_for_case_conversion(
         stmt = stmt.where(Trace.status == status)
     if search:
         stmt = stmt.where(Trace.query.ilike(f"%{search}%"))
+    if min_score is not None:
+        stmt = stmt.where(Trace.overall_score >= min_score)
+    if max_score is not None:
+        stmt = stmt.where(Trace.overall_score <= max_score)
+    if agent_version:
+        stmt = stmt.where(Trace.agent_version == agent_version)
 
     # 计数
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -790,3 +799,112 @@ def _span_type_to_layer(span_id, span_type_map: dict) -> str:
     if stype == "tool_call":
         return "tool"
     return stype
+
+
+# ═══════════════════════════════════════════════════════════════
+# 采样评测（Brain tool 用）
+# ═══════════════════════════════════════════════════════════════
+
+
+class SampleEvalRequest(BaseModel):
+    """采样评测请求（对应 Brain sample_and_evaluate tool）。"""
+    sample_size: int = 10
+    hours_back: int = 24
+    agent_version: Optional[str] = None
+
+
+class SampleEvalResponse(BaseModel):
+    sampled: int
+    batch_id: str
+    task_id: str
+    hours_back: int
+    message: Optional[str] = None
+
+
+@router.post("/sample", response_model=SampleEvalResponse, status_code=201)
+async def sample_and_evaluate(req: SampleEvalRequest, db: AsyncSession = Depends(get_db)):
+    """从生产 Trace 中采样并创建评测任务。
+
+    对应 Brain tool: ``sample_and_evaluate``
+    """
+    since = datetime.now(timezone.utc) - timedelta(hours=req.hours_back)
+    batch_id = uuid.uuid4()
+
+    # 查询生产 Trace
+    stmt = (
+        select(Trace)
+        .where(Trace.source == "production")
+        .where(Trace.created_at >= since)
+        .order_by(func.random())
+        .limit(req.sample_size)
+    )
+    if req.agent_version:
+        stmt = stmt.where(Trace.agent_version == req.agent_version)
+
+    result = await db.execute(stmt)
+    traces = result.scalars().all()
+
+    if not traces:
+        return SampleEvalResponse(
+            sampled=0,
+            batch_id=str(batch_id),
+            task_id="",
+            hours_back=req.hours_back,
+            message="没有找到符合条件的生产 Trace",
+        )
+
+    # 为每条 Trace 创建 EvalCase
+    sampled_count = 0
+    for trace in traces:
+        case = EvalCase(
+            query=trace.query,
+            context=trace.context or {},
+            source="sampling",
+            source_trace_id=trace.id if isinstance(trace.id, uuid.UUID) else None,
+            sampling_batch_id=batch_id,
+            difficulty="medium",
+            metadata_={
+                "trace_id": str(trace.id),
+                "agent_version": trace.agent_version,
+            },
+        )
+        db.add(case)
+        sampled_count += 1
+
+    # 创建 EvalTask + EvalRuns
+    task = EvalTask(
+        name=f"采样评测 {datetime.now(timezone.utc).strftime('%Y%m%d_%H%M')}",
+        agent_version=req.agent_version or "unknown",
+        status="pending",
+        total_cases=sampled_count,
+        config={
+            "trigger": "manual_sample",
+            "batch_id": str(batch_id),
+            "hours_back": req.hours_back,
+        },
+    )
+    db.add(task)
+    await db.flush()
+
+    # 获取刚创建的 cases 并创建 runs
+    case_stmt = select(EvalCase.id).where(EvalCase.sampling_batch_id == batch_id)
+    case_result = await db.execute(case_stmt)
+    created_case_ids = [row[0] for row in case_result.fetchall()]
+
+    for case_id in created_case_ids:
+        run = EvalRun(
+            task_id=task.id,
+            eval_case_id=case_id,
+            agent_version=req.agent_version or "unknown",
+            status="pending",
+        )
+        db.add(run)
+
+    await db.commit()
+
+    return SampleEvalResponse(
+        sampled=sampled_count,
+        batch_id=str(batch_id),
+        task_id=str(task.id),
+        hours_back=req.hours_back,
+    )

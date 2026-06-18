@@ -117,7 +117,11 @@ class CommandContext:
     """发送者名称（日志/审计用）"""
 
     db_session_factory: Any = None
-    """SQLAlchemy async_session_factory，用于创建 DB 会话"""
+    """**[DEPRECATED]** SQLAlchemy async_session_factory。
+    Brain 重构后不再直连数据库，请使用 api_base_url 通过 eval-api 访问数据。"""
+
+    api_base_url: str = "http://localhost:18000"
+    """eval-api 地址，Brain 通过 HTTP 调用 eval-api 获取数据。"""
 
     eval_service: Any = None
     """EvalService 实例（挂载式评测服务入口）"""

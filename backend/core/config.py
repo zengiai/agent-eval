@@ -52,6 +52,7 @@ class Settings(BaseSettings):
     TELEGRAM_MODE: str = "polling"        # polling | webhook
     TELEGRAM_ALLOWED_USERS: str = ""       # 逗号分隔的用户 ID 或 username
     TELEGRAM_PROXY: str = ""               # HTTP 代理（可选）
+    TELEGRAM_REPLY_REACTION: str = "🤔"     # 回复处理中给原消息设置的 reaction；空字符串表示关闭
 
     # Dispatcher（预留）
     DISPATCHER_MODEL: str = "qwen3.7-max"

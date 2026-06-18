@@ -1,4 +1,8 @@
-"""采样评测任务 —— 从生产 Trace 中定时采样并触发评测。"""
+"""采样评测任务 —— 从生产 Trace 中定时采样并触发评测。
+
+TODO(BrainAPIGatewayRefactor): 此 Job 仍直连数据库查询 Trace 计数，
+应在后续迭代中改为通过 EvalAPIClient 调用 eval-api 获取数据。
+"""
 
 import logging
 from datetime import datetime, timedelta, timezone

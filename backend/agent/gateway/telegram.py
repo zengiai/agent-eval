@@ -6,6 +6,7 @@ MVP 阶段仅支持 polling 模式；webhook 模式为 Phase 2 规划。
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from typing import Optional, Set
@@ -51,6 +52,8 @@ class TelegramGateway(IMGateway):
         token: str,
         allowed_users: Optional[Set[str]] = None,
         proxy: Optional[str] = None,
+        reply_reaction: Optional[str] = "🤔",
+        reply_reaction_timeout_seconds: float = 2.0,
     ) -> None:
         """初始化 Telegram 网关。
 
@@ -58,6 +61,8 @@ class TelegramGateway(IMGateway):
             token: Telegram Bot Token（必填）。
             allowed_users: 用户 ID 白名单。为空时拒绝所有用户。
             proxy: HTTP 代理地址（可选，如 ``http://127.0.0.1:7890``）。
+            reply_reaction: 回复处理中设置到原消息上的 reaction；空值表示关闭。
+            reply_reaction_timeout_seconds: reaction API 的本地保护超时。
         """
         if not token:
             raise ValueError("Telegram Bot Token 不能为空")
@@ -65,6 +70,8 @@ class TelegramGateway(IMGateway):
         self._token = token
         self._proxy = proxy
         self._allowed_users = allowed_users or set()
+        self._reply_reaction = reply_reaction.strip() if reply_reaction else ""
+        self._reply_reaction_timeout_seconds = reply_reaction_timeout_seconds
 
         # python-telegram-bot 组件（start() 时初始化）
         self._app = None  #: telegram.ext.Application
@@ -250,6 +257,72 @@ class TelegramGateway(IMGateway):
         """返回 ``"telegram"``。"""
         return "telegram"
 
+    async def _set_message_reaction(
+        self,
+        chat_id: str,
+        message_id: str,
+        reaction: list[str],
+        operation: str,
+    ) -> bool:
+        """设置或清理消息 reaction，失败不影响主回复链路。"""
+        if self._bot is None:
+            return False
+
+        set_reaction = getattr(self._bot, "set_message_reaction", None)
+        if set_reaction is None:
+            logger.warning("Telegram bot SDK does not support set_message_reaction")
+            return False
+
+        try:
+            await asyncio.wait_for(
+                set_reaction(
+                    chat_id=chat_id,
+                    message_id=int(message_id),
+                    reaction=reaction,
+                ),
+                timeout=self._reply_reaction_timeout_seconds,
+            )
+            return True
+        except Exception as e:
+            logger.warning(
+                "Failed to %s Telegram reaction for chat=%s message=%s: %s",
+                operation,
+                chat_id,
+                message_id,
+                e,
+            )
+            return False
+
+    async def _set_processing_reaction(self, msg: IMMessage) -> bool:
+        """在处理消息期间设置 reaction，返回是否设置成功。"""
+        if not self._reply_reaction or not self._can_react_to_message(msg):
+            return False
+        return await self._set_message_reaction(
+            chat_id=msg.chat_id,
+            message_id=msg.message_id,
+            reaction=[self._reply_reaction],
+            operation="set",
+        )
+
+    def _can_react_to_message(self, msg: IMMessage) -> bool:
+        """只对允许处理的用户显示处理中 reaction。"""
+        if not self._allowed_users:
+            return True
+        return (
+            msg.user_id in self._allowed_users
+            or msg.username in self._allowed_users
+            or f"@{msg.username}" in self._allowed_users
+        )
+
+    async def _clear_processing_reaction(self, msg: IMMessage) -> None:
+        """处理完成后清理 reaction，失败只记录日志。"""
+        await self._set_message_reaction(
+            chat_id=msg.chat_id,
+            message_id=msg.message_id,
+            reaction=[],
+            operation="clear",
+        )
+
     # ------------------------------------------------------------------
     # 内部：Telegram Update 处理
     # ------------------------------------------------------------------
@@ -262,14 +335,19 @@ class TelegramGateway(IMGateway):
         if self._handler is None:
             return
 
+        reaction_set = await self._set_processing_reaction(msg)
         try:
             reply = await self._handler(msg)
         except Exception:
             logger.exception("Message handler failed for user=%s", msg.user_id)
             reply = "处理消息时发生内部错误，请稍后重试。"
 
-        if reply:
-            await self.send_message(msg.chat_id, reply, msg.message_id)
+        try:
+            if reply:
+                await self.send_message(msg.chat_id, reply, msg.message_id)
+        finally:
+            if reaction_set:
+                await self._clear_processing_reaction(msg)
 
     async def _handle_command(self, update, context) -> None:
         """处理命令消息（统一处理 /xxx 格式）。"""
@@ -280,14 +358,19 @@ class TelegramGateway(IMGateway):
         if self._handler is None:
             return
 
+        reaction_set = await self._set_processing_reaction(msg)
         try:
             reply = await self._handler(msg)
         except Exception:
             logger.exception("Command handler failed for user=%s", msg.user_id)
             reply = "处理命令时发生内部错误，请稍后重试。"
 
-        if reply:
-            await self.send_message(msg.chat_id, reply, msg.message_id)
+        try:
+            if reply:
+                await self.send_message(msg.chat_id, reply, msg.message_id)
+        finally:
+            if reaction_set:
+                await self._clear_processing_reaction(msg)
 
     # ------------------------------------------------------------------
     # 内部：消息转换

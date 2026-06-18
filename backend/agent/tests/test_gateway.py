@@ -13,7 +13,9 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 
 import pytest
 
@@ -791,6 +793,11 @@ class TestTelegramGatewayInit:
         gw = TelegramGateway(token="123:abc", allowed_users={"u1", "u2"})
         assert gw._allowed_users == {"u1", "u2"}
 
+    def test_default_reply_reaction_is_thinking(self):
+        """默认处理中 reaction 应使用思考表情。"""
+        gw = TelegramGateway(token="123:abc")
+        assert gw._reply_reaction == "🤔"
+
     def test_command_handler_registration_accepts_all_commands(self):
         """python-telegram-bot v21 不支持 CommandHandler(None)，应使用 COMMAND filter。"""
         from telegram.ext import MessageHandler as TGMessageHandler
@@ -799,6 +806,175 @@ class TestTelegramGatewayInit:
         handler = TGMessageHandler(filters.COMMAND, lambda *_: None)
 
         assert handler is not None
+
+
+class _FakeTelegramMessage:
+    """测试用 Telegram 消息对象。"""
+
+    def __init__(self, message_id: int = 456) -> None:
+        self.message_id = message_id
+
+
+class _FakeTelegramBot:
+    """测试用 Telegram Bot，记录发送与 reaction 调用。"""
+
+    def __init__(self, reaction_error: Exception | None = None) -> None:
+        self.reaction_error = reaction_error
+        self.sent_messages: list[dict[str, object]] = []
+        self.reactions: list[dict[str, object]] = []
+        self.events: list[tuple[str, object, object]] = []
+
+    async def send_message(self, **kwargs) -> _FakeTelegramMessage:
+        self.sent_messages.append(kwargs)
+        self.events.append(("send", kwargs["text"], kwargs.get("reply_to_message_id")))
+        return _FakeTelegramMessage()
+
+    async def set_message_reaction(self, **kwargs) -> bool:
+        self.reactions.append(kwargs)
+        self.events.append(
+            ("reaction", kwargs["reaction"], kwargs.get("message_id"))
+        )
+        if self.reaction_error is not None:
+            raise self.reaction_error
+        return True
+
+
+class _FakeTelegramUpdate:
+    """测试用 Telegram Update，只实现网关读取的字段。"""
+
+    def __init__(
+        self,
+        text: str = "hello",
+        chat_id: int = 100,
+        user_id: int = 200,
+        message_id: int = 41,
+        username: str = "tester",
+    ) -> None:
+        self.effective_chat = SimpleNamespace(id=chat_id)
+        self.effective_user = SimpleNamespace(
+            id=user_id,
+            username=username,
+            first_name="Tester",
+        )
+        self.message = SimpleNamespace(
+            text=text,
+            message_id=message_id,
+            reply_to_message=None,
+        )
+
+    def to_dict(self) -> dict[str, object]:
+        return {"message": {"message_id": self.message.message_id}}
+
+
+class TestTelegramGatewayReplyReaction:
+    """Telegram 处理期间 reaction 测试。"""
+
+    async def test_handle_text_sets_and_clears_reaction_around_reply(self):
+        """处理消息时先设置 reaction，回复发送完成后清空 reaction。"""
+        gw = TelegramGateway(token="123:abc", reply_reaction="👌")
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        async def handler(msg: IMMessage) -> str:
+            assert msg.message_id == "41"
+            return "ok"
+
+        gw.on_message(handler)
+        await gw._handle_text(_FakeTelegramUpdate(), None)
+
+        assert bot.sent_messages == [
+            {
+                "chat_id": "100",
+                "text": "ok",
+                "reply_to_message_id": 41,
+            }
+        ]
+        assert bot.reactions == [
+            {
+                "chat_id": "100",
+                "message_id": 41,
+                "reaction": ["👌"],
+            },
+            {
+                "chat_id": "100",
+                "message_id": 41,
+                "reaction": [],
+            },
+        ]
+        assert bot.events == [
+            ("reaction", ["👌"], 41),
+            ("send", "ok", 41),
+            ("reaction", [], 41),
+        ]
+
+    async def test_handle_text_skips_reaction_when_disabled(self):
+        """reply_reaction 为空时，应只发送回复，不调用 reaction API。"""
+        gw = TelegramGateway(token="123:abc", reply_reaction="")
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        async def handler(msg: IMMessage) -> str:
+            return "ok"
+
+        gw.on_message(handler)
+        await gw._handle_text(_FakeTelegramUpdate(), None)
+
+        assert bot.sent_messages[0]["reply_to_message_id"] == 41
+        assert bot.reactions == []
+
+    async def test_handle_text_skips_reaction_for_non_allowed_user(self):
+        """配置白名单时，非白名单消息不显示处理中 reaction。"""
+        gw = TelegramGateway(
+            token="123:abc",
+            allowed_users={"allowed_user"},
+            reply_reaction="👌",
+        )
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        async def handler(msg: IMMessage) -> str:
+            return "ok"
+
+        gw.on_message(handler)
+        await gw._handle_text(_FakeTelegramUpdate(username="blocked_user"), None)
+
+        assert bot.sent_messages[0]["text"] == "ok"
+        assert bot.reactions == []
+
+    async def test_send_message_does_not_manage_processing_reaction(self):
+        """send_message 只负责发消息，不在回复后额外设置 reaction。"""
+        gw = TelegramGateway(token="123:abc", reply_reaction="👌")
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        msg_id = await gw.send_message("chat_1", "ok", reply_to="41")
+
+        assert msg_id == "456"
+        assert bot.sent_messages[0]["reply_to_message_id"] == 41
+        assert bot.reactions == []
+
+    async def test_reaction_set_failure_does_not_fail_reply(self, caplog):
+        """设置思考 reaction 失败时，主回复仍发送并记录 warning。"""
+        gw = TelegramGateway(token="123:abc", reply_reaction="👍")
+        bot = _FakeTelegramBot(reaction_error=RuntimeError("reaction denied"))
+        gw._bot = bot
+        caplog.set_level(logging.WARNING)
+
+        async def handler(msg: IMMessage) -> str:
+            return "ok"
+
+        gw.on_message(handler)
+        await gw._handle_text(_FakeTelegramUpdate(), None)
+
+        assert bot.sent_messages[0]["text"] == "ok"
+        assert bot.reactions == [
+            {
+                "chat_id": "100",
+                "message_id": 41,
+                "reaction": ["👍"],
+            }
+        ]
+        assert "Failed to set Telegram reaction" in caplog.text
 
 
 # ======================================================================
