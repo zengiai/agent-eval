@@ -18,8 +18,8 @@ class MockGateway(IMGateway):
         self._connected = False
         self.sent_messages: list[tuple[str, str, Optional[str]]] = []
         """记录发送的纯文本消息: [(chat_id, text, reply_to), ...]"""
-        self.sent_markdown: list[tuple[str, str, Optional[str]]] = []
-        """记录发送的 Markdown 消息: [(chat_id, markdown, reply_to), ...]"""
+        self.sent_html: list[tuple[str, str, Optional[str]]] = []
+        """记录发送的 HTML 消息: [(chat_id, html, reply_to), ...]"""
 
     async def start(self) -> None:
         self._connected = True
@@ -33,11 +33,11 @@ class MockGateway(IMGateway):
         self.sent_messages.append((chat_id, text, reply_to))
         return f"msg_{len(self.sent_messages)}"
 
-    async def send_markdown(
-        self, chat_id: str, markdown: str, reply_to: Optional[str] = None
+    async def send_html(
+        self, chat_id: str, html: str, reply_to: Optional[str] = None
     ) -> str:
-        self.sent_markdown.append((chat_id, markdown, reply_to))
-        return f"md_{len(self.sent_markdown)}"
+        self.sent_html.append((chat_id, html, reply_to))
+        return f"html_{len(self.sent_html)}"
 
     def on_message(self, handler: MessageHandler) -> None:
         self._handler = handler

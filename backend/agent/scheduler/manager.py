@@ -9,11 +9,13 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from dataclasses import replace
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.executors.asyncio import AsyncIOExecutor
+from apscheduler.jobstores.base import JobLookupError
 from apscheduler.jobstores.memory import MemoryJobStore
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
@@ -87,6 +89,7 @@ class JobManager:
 
         # 业务注册表
         self._job_registry: Dict[str, BaseJob] = {}
+        self._job_lifecycle: Dict[str, JobLifecycle] = {}
         self._started = False
 
         # 全局上下文（注入到每个 Job.execute()）
@@ -168,6 +171,10 @@ class JobManager:
             logger.info("Job [%s] 已禁用，仅注册不调度", cfg.job_id)
 
         self._job_registry[cfg.job_id] = job
+        self._job_lifecycle.setdefault(
+            cfg.job_id,
+            JobLifecycle.RUNNING if cfg.enabled else JobLifecycle.STOPPED,
+        )
 
         if cfg.enabled:
             trigger = self._build_trigger(cfg)
@@ -203,19 +210,47 @@ class JobManager:
             logger.debug("Job [%s] 不在调度器中（可能已暂停）", job_id)
 
         self._job_registry.pop(job_id, None)
+        self._job_lifecycle.pop(job_id, None)
         logger.info("Job [%s] 已注销", job_id)
 
     # ── 运行时控制 ────────────────────────────────────────────────
 
     def pause(self, job_id: str) -> None:
         """暂停任务（保留注册，停止调度触发）。"""
-        self._scheduler.pause_job(job_id)
+        if job_id not in self._job_registry:
+            self._scheduler.pause_job(job_id)
+            return
+
+        try:
+            self._scheduler.pause_job(job_id)
+        except JobLookupError:
+            lifecycle = self._job_lifecycle.get(job_id)
+            if lifecycle != JobLifecycle.PAUSED:
+                raise
+
+        self._job_lifecycle[job_id] = JobLifecycle.PAUSED
         self._safe_update_job_status(job_id, JobLifecycle.PAUSED)
         logger.info("Job [%s] 已暂停", job_id)
 
     def resume(self, job_id: str) -> None:
         """恢复已暂停的任务。"""
-        self._scheduler.resume_job(job_id)
+        try:
+            self._scheduler.resume_job(job_id)
+        except JobLookupError:
+            job = self._job_registry.get(job_id)
+            if not job:
+                raise
+            cfg = job.get_config()
+            trigger = self._build_trigger(cfg)
+            self._scheduler.add_job(
+                func=self._execute_wrapper,
+                trigger=trigger,
+                id=cfg.job_id,
+                name=cfg.name,
+                replace_existing=True,
+                kwargs={"job": job},
+            )
+        self._job_lifecycle[job_id] = JobLifecycle.RUNNING
         self._safe_update_job_status(job_id, JobLifecycle.RUNNING)
         logger.info("Job [%s] 已恢复", job_id)
 
@@ -287,7 +322,25 @@ class JobManager:
 
     def list_jobs(self) -> List[JobConfig]:
         """列出所有已注册任务（含暂停的）。"""
-        return [j.get_config() for j in self._job_registry.values()]
+        return [
+            replace(cfg, enabled=self._is_job_effectively_enabled(cfg))
+            for cfg in (j.get_config() for j in self._job_registry.values())
+        ]
+
+    def _is_job_effectively_enabled(self, cfg: JobConfig) -> bool:
+        """返回 Job 当前是否会被定时触发。"""
+        if not cfg.enabled:
+            return False
+
+        lifecycle = self._job_lifecycle.get(cfg.job_id)
+        if lifecycle in {JobLifecycle.PAUSED, JobLifecycle.STOPPED}:
+            return False
+
+        if self._scheduler.running:
+            aps_job = self._scheduler.get_job(cfg.job_id)
+            if aps_job is not None and getattr(aps_job, "next_run_time", None) is None:
+                return False
+        return True
 
     async def get_history(
         self, job_id: str, limit: int = 20
@@ -560,6 +613,19 @@ class JobManager:
                 job = self._job_registry.get(row.job_id)
                 if job:
                     try:
+                        try:
+                            lifecycle = JobLifecycle(row.status)
+                        except ValueError:
+                            lifecycle = JobLifecycle.RUNNING if row.enabled else JobLifecycle.STOPPED
+                        self._job_lifecycle[row.job_id] = lifecycle
+
+                        if lifecycle == JobLifecycle.PAUSED:
+                            try:
+                                self._scheduler.remove_job(row.job_id)
+                            except Exception:
+                                pass
+                            continue
+
                         trigger = self._build_trigger_from(
                             TriggerType(row.trigger_type), row.trigger_value
                         )

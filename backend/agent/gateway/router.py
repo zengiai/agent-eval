@@ -10,6 +10,7 @@ MessageRouter 是 IM Gateway 与 AgentBrain 之间的桥梁：
 
 from __future__ import annotations
 
+import html
 import logging
 import uuid
 from dataclasses import dataclass, field
@@ -166,7 +167,7 @@ class MessageRouter:
                 return await handler(msg)
             else:
                 logger.info("Unknown command: /%s from user=%s", cmd, msg.user_id)
-                return f"未知命令: /{cmd}。输入 /help 查看可用命令。"
+                return f"未知命令: /{self._html(cmd)}。输入 /help 查看可用命令。"
 
         # 5. LLM 意图理解（委托 AgentBrain）
         if self._enable_llm and self._brain is not None:
@@ -189,32 +190,32 @@ class MessageRouter:
     async def _cmd_help(self, msg: IMMessage) -> str:
         """返回帮助信息。"""
         return (
-            "🤖 **agent-eval 评测助手**\n\n"
-            "**快速命令**（即时响应，不消耗 LLM Token）\n"
-            "/help    — 显示此帮助信息\n"
-            "/status  — 查看系统状态概览\n"
-            "/ping    — 连通性检查\n"
-            "/jobs    — 列出调度任务\n"
-            "/eval <version> — 快捷触发评测（需二次确认）\n"
-            "/sample [n]     — 快捷采样评测（n>20 需确认）\n\n"
-            "**自然语言能力**（通过 AI 理解）\n"
+            "🤖 <b>agent-eval 评测助手</b>\n\n"
+            "<b>快速命令</b>（即时响应，不消耗 LLM Token）\n"
+            "<code>/help</code>    — 显示此帮助信息\n"
+            "<code>/status</code>  — 查看系统状态概览\n"
+            "<code>/ping</code>    — 连通性检查\n"
+            "<code>/jobs</code>    — 列出调度任务\n"
+            "<code>/eval &lt;version&gt;</code> — 快捷触发评测（需二次确认）\n"
+            "<code>/sample [n]</code>     — 快捷采样评测（n&gt;20 需确认）\n\n"
+            "<b>自然语言能力</b>（通过 AI 理解）\n"
             "直接输入中文即可，例如：\n"
-            "• 查询评测状态、评分趋势、Trace 详情\n"
+            "• 查询评测用例列表、查看单个用例详情\n"
+            "• 搜索 Trace、查看 Trace 详情\n"
+            "• 列出测试用例集\n"
             "• 触发评测任务、手动采样评测\n"
             "• 管理后台调度任务\n"
-            "• 查看日报、版本对比、弱点评分用例\n"
-            "• 查询历史告警记录\n"
         )
 
     async def _cmd_status(self, msg: IMMessage) -> str:
         """返回系统状态概览。"""
         sched_status = "running" if (self._scheduler and self._scheduler.is_started) else "未初始化"
         return (
-            '🟢 **系统状态**\n'
-            f'• 网关平台: {msg.platform}\n'
+            '<b>🟢 系统状态</b>\n'
+            f'• 网关平台: {self._html(msg.platform)}\n'
             '• 评测引擎: running\n'
-            f'• 调度器: {sched_status}\n'
-            '• 更多详情请使用自然语言查询（如「最近评测状态」）'
+            f'• 调度器: {self._html(sched_status)}\n'
+            '• 更多详情请使用自然语言查询（如「列一下最近的评测用例」）'
         )
 
     async def _cmd_ping(self, msg: IMMessage) -> str:
@@ -225,22 +226,22 @@ class MessageRouter:
         """列出调度任务状态。"""
         if self._scheduler is None:
             return (
-                "📋 **调度任务**\n"
+                "📋 <b>调度任务</b>\n"
                 "调度器尚未初始化，暂无任务信息。\n"
             )
 
         jobs = self._scheduler.list_jobs()
         if not jobs:
-            return "📋 **调度任务**\n当前没有已注册的定时任务。"
+            return "📋 <b>调度任务</b>\n当前没有已注册的定时任务。"
 
-        lines = ["📋 **调度任务**\n"]
+        lines = ["📋 <b>调度任务</b>\n"]
         for j in jobs:
             trigger_desc = f"{j.trigger_type.value}={j.trigger_value}"
             status_icon = "🟢" if j.enabled else "🔴"
             lines.append(
-                f"{status_icon} **{j.name}**\n"
-                f"  • ID: `{j.job_id}`\n"
-                f"  • 触发器: {trigger_desc}\n"
+                f"{status_icon} <b>{self._html(j.name)}</b>\n"
+                f"  • ID: <code>{self._html(j.job_id)}</code>\n"
+                f"  • 触发器: {self._html(trigger_desc)}\n"
                 f"  • 超时: {j.timeout_seconds}s\n"
             )
         return "\n".join(lines)
@@ -249,7 +250,7 @@ class MessageRouter:
         """快捷触发评测——高风险操作，需二次确认。"""
         args = msg.text[5:].strip()  # 去掉 "/eval "
         if not args:
-            return "用法: /eval <version>，例如 /eval v2.3.1"
+            return "用法: <code>/eval &lt;version&gt;</code>，例如 <code>/eval v2.3.1</code>"
 
         token = self._generate_confirmation_token()
         self._pending_confirmations[token] = PendingAction(
@@ -261,8 +262,8 @@ class MessageRouter:
         )
         logger.info("Eval confirmation required: version=%s token=%s user=%s", args, token, msg.user_id)
         return (
-            f"⚠️ 即将触发版本 **{args}** 的评测。\n"
-            f"回复 `confirm {token}` 继续，{self._confirmation_timeout} 秒内有效。"
+            f"⚠️ 即将触发版本 <b>{self._html(args)}</b> 的评测。\n"
+            f"回复 <code>confirm {self._html(token)}</code> 继续，{self._confirmation_timeout} 秒内有效。"
         )
 
     async def _cmd_sample(self, msg: IMMessage) -> str:
@@ -287,7 +288,7 @@ class MessageRouter:
             )
             logger.info("Sample confirmation required: n=%d token=%s user=%s", n, token, msg.user_id)
             return (
-                f"⚠️ 采样量 {n} 较大，回复 `confirm {token}` 继续，"
+                f"⚠️ 采样量 {n} 较大，回复 <code>confirm {self._html(token)}</code> 继续，"
                 f"{self._confirmation_timeout} 秒内有效。"
             )
 
@@ -340,7 +341,7 @@ class MessageRouter:
                 except Exception:
                     logger.exception("AgentBrain.handle_eval failed")
                     return "评测执行失败，请稍后重试。"
-            return f"✅ 评测已触发：版本 {pending.args.get('agent_version', '?')}（AgentBrain 尚未实现，此为占位响应）"
+            return f"✅ 评测已触发：版本 {self._html(pending.args.get('agent_version', '?'))}（AgentBrain 尚未实现，此为占位响应）"
 
         if pending.action == "sample":
             n = pending.args.get("sample_size", 0)
@@ -361,3 +362,8 @@ class MessageRouter:
     def _generate_confirmation_token(self) -> str:
         """生成唯一确认 token（8 位 hex）。"""
         return uuid.uuid4().hex[:8]
+
+    @staticmethod
+    def _html(value: Any) -> str:
+        """转义 Telegram HTML 文本节点中的动态值。"""
+        return html.escape("" if value is None else str(value))

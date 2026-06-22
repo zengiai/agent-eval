@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import re
 from typing import Optional, Set
 
 from backend.agent.gateway.base import (
@@ -43,9 +42,6 @@ class TelegramGateway(IMGateway):
         - 不在白名单中的用户：不回复、不报错（静默拒绝）
         - 管理操作（trigger_evaluation 等）需消息内二次确认（由上层 Dispatcher 实现）
     """
-
-    #: MarkdownV2 需要转义的特殊字符（按 Telegram Bot API 规范）
-    _MARKDOWN_V2_ESCAPE_CHARS = r"_*\[\]()~`>#+\-=|{}.!"
 
     def __init__(
         self,
@@ -186,20 +182,20 @@ class TelegramGateway(IMGateway):
             logger.error("Failed to send message to chat=%s: %s", chat_id, e)
             raise SendFailedError(str(e)) from e
 
-    async def send_markdown(
+    async def send_html(
         self,
         chat_id: str,
-        markdown: str,
+        html: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """发送 MarkdownV2 格式消息。
+        """发送 HTML 格式消息。
 
-        自动转义特殊字符后以 MarkdownV2 parse_mode 发送。
+        以 Telegram HTML parse_mode 发送。
         发送失败时降级为纯文本。
 
         Args:
             chat_id: 目标会话 ID。
-            markdown: Markdown 文本。
+            html: HTML 文本。
             reply_to: 可选，引用回复的消息 ID。
 
         Returns:
@@ -212,25 +208,24 @@ class TelegramGateway(IMGateway):
                 "python-telegram-bot 未安装。请执行: pip install python-telegram-bot>=21.0"
             )
 
-        escaped = self._escape_markdown_v2(markdown)
-
-        if len(escaped) > TELEGRAM_MAX_MESSAGE_LENGTH:
-            escaped = escaped[: TELEGRAM_MAX_MESSAGE_LENGTH - 13] + "...(truncated)"
+        html_text = html
+        if len(html_text) > TELEGRAM_MAX_MESSAGE_LENGTH:
+            html_text = html_text[: TELEGRAM_MAX_MESSAGE_LENGTH - 13] + "...(truncated)"
 
         try:
             msg = await self._bot.send_message(
                 chat_id=chat_id,
-                text=escaped,
-                parse_mode=ParseMode.MARKDOWN_V2,
+                text=html_text,
+                parse_mode=ParseMode.HTML,
                 reply_to_message_id=int(reply_to) if reply_to else None,
             )
             return str(msg.message_id)
         except Exception as e:
             logger.warning(
-                "MarkdownV2 send failed, falling back to plain text: %s", e
+                "HTML send failed, falling back to plain text: %s", e
             )
             # 降级为纯文本
-            return await self.send_message(chat_id, markdown, reply_to)
+            return await self.send_message(chat_id, html, reply_to)
 
     # ------------------------------------------------------------------
     # 回调注册
@@ -344,7 +339,7 @@ class TelegramGateway(IMGateway):
 
         try:
             if reply:
-                await self.send_message(msg.chat_id, reply, msg.message_id)
+                await self.send_html(msg.chat_id, reply, msg.message_id)
         finally:
             if reaction_set:
                 await self._clear_processing_reaction(msg)
@@ -367,7 +362,7 @@ class TelegramGateway(IMGateway):
 
         try:
             if reply:
-                await self.send_message(msg.chat_id, reply, msg.message_id)
+                await self.send_html(msg.chat_id, reply, msg.message_id)
         finally:
             if reaction_set:
                 await self._clear_processing_reaction(msg)
@@ -401,25 +396,3 @@ class TelegramGateway(IMGateway):
             ),
             raw=update.to_dict() if hasattr(update, "to_dict") else {},
         )
-
-    # ------------------------------------------------------------------
-    # 内部：MarkdownV2 转义
-    # ------------------------------------------------------------------
-
-    @classmethod
-    def _escape_markdown_v2(cls, text: str) -> str:
-        """转义 Telegram MarkdownV2 特殊字符。
-
-        根据 `Telegram Bot API 文档
-        <https://core.telegram.org/bots/api#markdownv2-style>`_，
-        以下字符需要在正文中转义::
-
-            _ * [ ] ( ) ~ ` > # + - = | { } . !
-
-        Args:
-            text: 原始文本。
-
-        Returns:
-            转义后的文本。
-        """
-        return re.sub(rf"([{re.escape(cls._MARKDOWN_V2_ESCAPE_CHARS)}])", r"\\\1", text)

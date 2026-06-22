@@ -26,7 +26,7 @@ class FunctionRegistry:
         registry = FunctionRegistry()
         registry.register(FunctionDef(...), handler=my_handler)
         defs = registry.get_definitions()   # → tools 参数
-        result = await registry.execute("query_score_trend", args, context)
+        result = await registry.execute("list_cases", args, context)
     """
 
     def __init__(self) -> None:

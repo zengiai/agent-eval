@@ -41,6 +41,7 @@ AGENTS.md
 .qoder/
 
 /docs/features/**
+/docs/features/
 
 .env
 

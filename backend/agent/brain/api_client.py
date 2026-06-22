@@ -13,7 +13,6 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-# eval-api 默认地址（同进程内嵌部署）
 DEFAULT_BASE_URL = "http://localhost:18000"
 
 
@@ -23,7 +22,7 @@ class EvalAPIClient:
     用法::
 
         client = EvalAPIClient(base_url="http://localhost:18000")
-        status = await client.get_eval_status(agent_version="v2.3.1")
+        cases = await client.list_cases(source="manual", limit=20)
     """
 
     def __init__(self, base_url: str = DEFAULT_BASE_URL, timeout: float = 30.0) -> None:
@@ -34,31 +33,44 @@ class EvalAPIClient:
     # 查询类
     # ------------------------------------------------------------------
 
-    async def get_eval_status(
+    async def list_cases(
         self,
-        agent_version: Optional[str] = None,
-        hours_back: int = 24,
+        source: Optional[str] = None,
+        category: Optional[str] = None,
+        difficulty: Optional[str] = None,
+        review_status: Optional[str] = None,
+        health_status: Optional[str] = None,
+        search: Optional[str] = None,
+        limit: int = 20,
     ) -> Dict[str, Any]:
-        """评测状态概览 → GET /api/stats/overview"""
-        params = {"hours_back": hours_back}
-        if agent_version:
-            params["agent_version"] = agent_version
-        return await self._get("/api/stats/overview", params=params)
+        """查询用例列表 → GET /api/cases"""
+        params: Dict[str, Any] = {"limit": min(limit, 100)}
+        if source:
+            params["source"] = source
+        if category:
+            params["category"] = category
+        if difficulty:
+            params["difficulty"] = difficulty
+        if review_status:
+            params["review_status"] = review_status
+        if health_status:
+            params["health_status"] = health_status
+        if search:
+            params["search"] = search
+        return await self._get("/api/cases", params=params)
 
-    async def query_score_trend(
-        self,
-        agent_version: Optional[str] = None,
-        last_n: int = 5,
-        layer: str = "overall",
-        case_set_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """评分趋势 → GET /api/stats/trend"""
-        params: Dict[str, Any] = {"last_n": last_n, "layer": layer}
-        if agent_version:
-            params["agent_version"] = agent_version
-        if case_set_name:
-            params["case_set_name"] = case_set_name
-        return await self._get("/api/stats/trend", params=params)
+    async def get_case_detail(self, case_id: str) -> Dict[str, Any]:
+        """获取用例详情与评分历史 → GET /api/cases/{case_id} + /scores"""
+        case = await self._get(f"/api/cases/{case_id}")
+        scores = await self._get(f"/api/cases/{case_id}/scores")
+        return {
+            "case": case,
+            "score_summary": {
+                "last_avg_score": scores.get("last_avg_score"),
+                "run_count": scores.get("run_count"),
+            },
+            "scores": scores.get("history", scores.get("scores", [])),
+        }
 
     async def search_traces(
         self,
@@ -103,18 +115,6 @@ class EvalAPIClient:
             params["search"] = search
         return await self._get("/api/case-sets", params=params)
 
-    async def get_weakest_cases(
-        self,
-        agent_version: Optional[str] = None,
-        top_n: int = 10,
-        layer: str = "overall",
-    ) -> Dict[str, Any]:
-        """弱点评分用例 → GET /api/stats/weakest-cases"""
-        params: Dict[str, Any] = {"top_n": top_n, "layer": layer}
-        if agent_version:
-            params["agent_version"] = agent_version
-        return await self._get("/api/stats/weakest-cases", params=params)
-
     # ------------------------------------------------------------------
     # 操作类
     # ------------------------------------------------------------------
@@ -149,47 +149,6 @@ class EvalAPIClient:
         return await self._post("/api/cases/sample", json=body)
 
     # ------------------------------------------------------------------
-    # 报告类
-    # ------------------------------------------------------------------
-
-    async def compare_versions(
-        self,
-        version_a: str,
-        version_b: str,
-        case_set_name: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """版本对比 → GET /api/stats/compare"""
-        params: Dict[str, Any] = {"version_a": version_a, "version_b": version_b}
-        if case_set_name:
-            params["case_set_name"] = case_set_name
-        return await self._get("/api/stats/compare", params=params)
-
-    async def get_daily_report(
-        self,
-        date: Optional[str] = None,
-        agent_version: Optional[str] = None,
-    ) -> Dict[str, Any]:
-        """日报 → GET /api/stats/daily-report"""
-        params: Dict[str, Any] = {}
-        if date:
-            params["date"] = date
-        if agent_version:
-            params["agent_version"] = agent_version
-        return await self._get("/api/stats/daily-report", params=params)
-
-    async def get_alert_history(
-        self,
-        severity: Optional[str] = None,
-        hours_back: int = 24,
-        limit: int = 20,
-    ) -> Dict[str, Any]:
-        """告警历史 → GET /api/alerts/history"""
-        params: Dict[str, Any] = {"hours_back": hours_back, "limit": limit}
-        if severity:
-            params["severity"] = severity
-        return await self._get("/api/alerts/history", params=params)
-
-    # ------------------------------------------------------------------
     # HTTP 底层
     # ------------------------------------------------------------------
 
@@ -222,7 +181,6 @@ class EvalAPIClient:
     def _handle_response(self, resp: httpx.Response) -> Dict[str, Any]:
         """统一处理 HTTP 响应。"""
         if resp.status_code == 501:
-            # 占位端点，返回原始内容（含 note）
             return resp.json()
         if resp.status_code >= 400:
             detail = "未知错误"

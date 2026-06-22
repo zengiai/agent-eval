@@ -32,6 +32,8 @@
   .tab-btn { padding: 10px 24px; border: none; background: none; font-size: 15px; font-weight: 600; color: var(--text-secondary); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .2s; }
   .tab-btn:hover { color: var(--text); }
   .tab-btn.active { color: var(--primary); border-bottom-color: var(--primary); }
+  .tab-link { padding: 10px 24px; font-size: 15px; font-weight: 600; color: var(--text-secondary); text-decoration: none; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all .2s; }
+  .tab-link:hover { color: var(--primary); border-bottom-color: var(--primary); }
 
   .toolbar { display: flex; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; align-items: center; }
   .toolbar input, .toolbar select { padding: 8px 12px; border: 1px solid var(--border); border-radius: 6px; font-size: 14px; outline: none; transition: border-color .2s; }
@@ -195,6 +197,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="traces">🔍 Traces</button>
     <button class="tab-btn" data-tab="cases">📋 Cases</button>
+    <a class="tab-link" href="/dashboard/brain.html">🧠 Brain</a>
   </div>
 
   <!-- Traces 面板 -->

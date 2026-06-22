@@ -7,7 +7,7 @@
 - MessageRouter 路由逻辑
   - 白名单、命令、LLM fallback
   - 高风险操作确认流程（/eval、/sample）
-- TelegramGateway MarkdownV2 转义
+- TelegramGateway HTML 自动回复
 """
 
 from __future__ import annotations
@@ -146,11 +146,11 @@ class TestMockGateway:
         await mock_gateway.send_message("chat_1", "reply text", reply_to="msg_0")
         assert mock_gateway.sent_messages == [("chat_1", "reply text", "msg_0")]
 
-    async def test_send_markdown(self, mock_gateway: MockGateway):
-        """send_markdown 应记录 Markdown 消息。"""
-        msg_id = await mock_gateway.send_markdown("chat_1", "**bold**")
-        assert msg_id == "md_1"
-        assert mock_gateway.sent_markdown == [("chat_1", "**bold**", None)]
+    async def test_send_html(self, mock_gateway: MockGateway):
+        """send_html 应记录 HTML 消息。"""
+        msg_id = await mock_gateway.send_html("chat_1", "<b>bold</b>")
+        assert msg_id == "html_1"
+        assert mock_gateway.sent_html == [("chat_1", "<b>bold</b>", None)]
 
     async def test_on_message_registers_handler(self, mock_gateway: MockGateway):
         """on_message 应注册消息处理器。"""
@@ -718,53 +718,6 @@ class TestPendingAction:
 
 
 # ======================================================================
-# TelegramGateway MarkdownV2 转义
-# ======================================================================
-
-
-class TestMarkdownV2Escape:
-    """Telegram MarkdownV2 转义测试。"""
-
-    def test_escape_special_chars(self):
-        """特殊字符应被正确转义。"""
-        cases = [
-            ("_underscore_", r"\_underscore\_"),
-            ("*bold*", r"\*bold\*"),
-            ("[link](url)", r"\[link\]\(url\)"),
-            ("`code`", r"\`code\`"),
-            ("a > b", r"a \> b"),
-            ("# heading", r"\# heading"),
-            ("+ list", r"\+ list"),
-            ("a - b", r"a \- b"),
-            ("a = b", r"a \= b"),
-            ("|pipe|", r"\|pipe\|"),
-            ("{brace}", r"\{brace\}"),
-            ("dot.text", r"dot\.text"),
-            ("!bang", r"\!bang"),
-        ]
-        for text, expected in cases:
-            result = TelegramGateway._escape_markdown_v2(text)
-            assert result == expected, f"Failed for: {text}"
-
-    def test_normal_text_unchanged(self):
-        """普通文本不应被修改。"""
-        text = "Hello World 123"
-        result = TelegramGateway._escape_markdown_v2(text)
-        assert result == text
-
-    def test_combined_special_chars(self):
-        """组合特殊字符应全部转义。"""
-        text = "a * b _ c [d] (e) ~f"
-        result = TelegramGateway._escape_markdown_v2(text)
-        assert "\\*" in result
-        assert "\\_" in result
-        assert "\\[" in result
-        assert "\\]" in result
-        assert "\\(" in result
-        assert "\\)" in result
-
-
-# ======================================================================
 # TelegramGateway 初始化
 # ======================================================================
 
@@ -818,13 +771,22 @@ class _FakeTelegramMessage:
 class _FakeTelegramBot:
     """测试用 Telegram Bot，记录发送与 reaction 调用。"""
 
-    def __init__(self, reaction_error: Exception | None = None) -> None:
+    def __init__(
+        self,
+        reaction_error: Exception | None = None,
+        html_send_error: Exception | None = None,
+    ) -> None:
         self.reaction_error = reaction_error
+        self.html_send_error = html_send_error
+        self.send_attempts: list[dict[str, object]] = []
         self.sent_messages: list[dict[str, object]] = []
         self.reactions: list[dict[str, object]] = []
         self.events: list[tuple[str, object, object]] = []
 
     async def send_message(self, **kwargs) -> _FakeTelegramMessage:
+        self.send_attempts.append(kwargs)
+        if kwargs.get("parse_mode") is not None and self.html_send_error is not None:
+            raise self.html_send_error
         self.sent_messages.append(kwargs)
         self.events.append(("send", kwargs["text"], kwargs.get("reply_to_message_id")))
         return _FakeTelegramMessage()
@@ -866,11 +828,59 @@ class _FakeTelegramUpdate:
         return {"message": {"message_id": self.message.message_id}}
 
 
+class TestTelegramGatewayHtml:
+    """Telegram HTML 发送测试。"""
+
+    async def test_send_html_uses_html_parse_mode(self):
+        """send_html 应使用 Telegram HTML parse_mode。"""
+        from telegram.constants import ParseMode
+
+        gw = TelegramGateway(token="123:abc")
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        msg_id = await gw.send_html("chat_1", "<b>ok</b>", reply_to="41")
+
+        assert msg_id == "456"
+        assert bot.sent_messages == [
+            {
+                "chat_id": "chat_1",
+                "text": "<b>ok</b>",
+                "parse_mode": ParseMode.HTML,
+                "reply_to_message_id": 41,
+            }
+        ]
+
+    async def test_send_html_falls_back_to_plain_text(self, caplog):
+        """HTML 发送失败时应降级为纯文本。"""
+        from telegram.constants import ParseMode
+
+        gw = TelegramGateway(token="123:abc")
+        bot = _FakeTelegramBot(html_send_error=RuntimeError("bad html"))
+        gw._bot = bot
+        caplog.set_level(logging.WARNING)
+
+        msg_id = await gw.send_html("chat_1", "<b>bad", reply_to="41")
+
+        assert msg_id == "456"
+        assert bot.send_attempts[0]["parse_mode"] == ParseMode.HTML
+        assert bot.sent_messages == [
+            {
+                "chat_id": "chat_1",
+                "text": "<b>bad",
+                "reply_to_message_id": 41,
+            }
+        ]
+        assert "HTML send failed, falling back to plain text" in caplog.text
+
+
 class TestTelegramGatewayReplyReaction:
     """Telegram 处理期间 reaction 测试。"""
 
     async def test_handle_text_sets_and_clears_reaction_around_reply(self):
         """处理消息时先设置 reaction，回复发送完成后清空 reaction。"""
+        from telegram.constants import ParseMode
+
         gw = TelegramGateway(token="123:abc", reply_reaction="👌")
         bot = _FakeTelegramBot()
         gw._bot = bot
@@ -886,6 +896,7 @@ class TestTelegramGatewayReplyReaction:
             {
                 "chat_id": "100",
                 "text": "ok",
+                "parse_mode": ParseMode.HTML,
                 "reply_to_message_id": 41,
             }
         ]
@@ -905,6 +916,30 @@ class TestTelegramGatewayReplyReaction:
             ("reaction", ["👌"], 41),
             ("send", "ok", 41),
             ("reaction", [], 41),
+        ]
+
+    async def test_handle_command_replies_with_html(self):
+        """命令自动回复也应使用 HTML parse_mode。"""
+        from telegram.constants import ParseMode
+
+        gw = TelegramGateway(token="123:abc", reply_reaction="")
+        bot = _FakeTelegramBot()
+        gw._bot = bot
+
+        async def handler(msg: IMMessage) -> str:
+            assert msg.is_command is True
+            return "<b>cmd ok</b>"
+
+        gw.on_message(handler)
+        await gw._handle_command(_FakeTelegramUpdate(text="/help"), None)
+
+        assert bot.sent_messages == [
+            {
+                "chat_id": "100",
+                "text": "<b>cmd ok</b>",
+                "parse_mode": ParseMode.HTML,
+                "reply_to_message_id": 41,
+            }
         ]
 
     async def test_handle_text_skips_reaction_when_disabled(self):

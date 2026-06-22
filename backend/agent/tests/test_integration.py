@@ -146,6 +146,20 @@ def brain_with_context(registry: FunctionRegistry, scheduler: JobManager, mock_g
     return CommandExecutor(parser=parser, registry=registry, context_factory=context_factory)
 
 
+def _register_fake_query_tool(registry: FunctionRegistry, name: str, handler) -> None:
+    """覆盖单个查询工具 handler，保持 Router→Brain→Registry→Formatter 链路不变。"""
+    registry.register(
+        FunctionDef(
+            name=name,
+            description=name,
+            parameters={"type": "object", "properties": {}, "required": []},
+            category="query",
+            risk_level="low",
+        ),
+        handler,
+    )
+
+
 # ======================================================================
 # 集成测试 1：Gateway → Brain（完整 LLM Fallback 链路）
 # ======================================================================
@@ -164,11 +178,30 @@ class TestGatewayBrainIntegration:
             allowed_users={"u1"},
         )
 
-        # Mock LLM 响应：query_score_trend
+        async def fake_list_cases_handler(args: dict, ctx: CommandContext) -> dict:
+            return {
+                "total": 1,
+                "items": [
+                    {
+                        "id": "case-001",
+                        "query": "查询订单状态",
+                        "source": "manual",
+                        "category": args.get("category", "order"),
+                        "difficulty": "medium",
+                        "review_status": "approved",
+                        "health_status": "healthy",
+                        "last_avg_score": 92.0,
+                    }
+                ],
+            }
+
+        _register_fake_query_tool(registry, "list_cases", fake_list_cases_handler)
+
+        # Mock LLM 响应：list_cases
         async def mock_parse(text, history):
             return IntentResult(
-                function_name="query_score_trend",
-                arguments={"agent_version": "v2.3.1", "last_n": 3},
+                function_name="list_cases",
+                arguments={"category": "order", "limit": 3},
                 risk_level="low",
             )
 
@@ -176,12 +209,12 @@ class TestGatewayBrainIntegration:
 
         msg = IMMessage(
             platform="mock", chat_id="c1", user_id="u1",
-            username="test", text="查一下 v2.3.1 的评分趋势", message_id="m1",
+            username="test", text="列一下订单用例", message_id="m1",
         )
         reply = await router.handle(msg)
         assert reply is not None
-        assert "评分趋势" in reply
-        assert "v2.3.1" in reply
+        assert "评测用例列表" in reply
+        assert "case-001" in reply
 
     @pytest.mark.asyncio
     async def test_router_delegates_to_brain_and_formats_reply(
@@ -190,11 +223,35 @@ class TestGatewayBrainIntegration:
         """验证 MessageRouter 正确委托给 brain 并返回格式化回复。"""
         router = MessageRouter(mock_gateway, brain=brain_with_context, allowed_users={"u1"})
 
-        # Mock LLM 返回 get_latest_eval_status 意图
+        async def fake_case_detail_handler(args: dict, ctx: CommandContext) -> dict:
+            return {
+                "case": {
+                    "id": args.get("case_id"),
+                    "query": "查询订单状态",
+                    "source": "manual",
+                    "category": "order",
+                    "difficulty": "medium",
+                    "review_status": "approved",
+                    "health_status": "healthy",
+                },
+                "score_summary": {"last_avg_score": 88.0, "run_count": 1},
+                "scores": [
+                    {
+                        "created_at": "2026-06-18T10:00:00",
+                        "status": "completed",
+                        "overall_score": 88.0,
+                        "scores": [{"layer": "intent", "score": 90.0}],
+                    }
+                ],
+            }
+
+        _register_fake_query_tool(registry, "get_case_detail", fake_case_detail_handler)
+
+        # Mock LLM 返回 get_case_detail 意图
         async def mock_parse(text, history):
             return IntentResult(
-                function_name="get_latest_eval_status",
-                arguments={"hours_back": 24},
+                function_name="get_case_detail",
+                arguments={"case_id": "case-001"},
                 risk_level="low",
             )
 
@@ -202,11 +259,109 @@ class TestGatewayBrainIntegration:
 
         msg = IMMessage(
             platform="mock", chat_id="c1", user_id="u1",
-            username="test", text="最近的评测状态怎么样", message_id="m1",
+            username="test", text="看一下 case-001", message_id="m1",
         )
         reply = await router.handle(msg)
         assert reply is not None
-        assert "评测状态概览" in reply
+        assert "评测用例详情" in reply
+        assert "最近评分历史" in reply
+
+    @pytest.mark.asyncio
+    async def test_router_delegates_list_cases_and_formats_reply(
+        self, mock_gateway: MockGateway, registry: FunctionRegistry, brain_with_context: CommandExecutor
+    ):
+        """新增 list_cases tool 应走正常 Brain 链路并返回美化后的列表。"""
+        router = MessageRouter(mock_gateway, brain=brain_with_context, allowed_users={"u1"})
+
+        async def fake_list_cases_handler(args: dict, ctx: CommandContext) -> dict:
+            return {
+                "total": 1,
+                "items": [
+                    {
+                        "id": "case-001",
+                        "query": "查询订单状态",
+                        "source": "manual",
+                        "category": "order",
+                        "difficulty": "medium",
+                        "review_status": "approved",
+                        "health_status": "healthy",
+                        "last_avg_score": 92.0,
+                    }
+                ],
+            }
+
+        _register_fake_query_tool(registry, "list_cases", fake_list_cases_handler)
+
+        async def mock_parse(text, history):
+            return IntentResult(
+                function_name="list_cases",
+                arguments={"category": "order", "limit": 5},
+                risk_level="low",
+            )
+
+        brain_with_context._parser.parse = mock_parse
+
+        msg = IMMessage(
+            platform="mock", chat_id="c1", user_id="u1",
+            username="test", text="列一下订单用例", message_id="m1",
+        )
+        reply = await router.handle(msg)
+        assert reply is not None
+        assert "评测用例列表" in reply
+        assert "case-001" in reply
+        assert "92.0" in reply
+
+    @pytest.mark.asyncio
+    async def test_router_delegates_case_detail_and_formats_reply(
+        self, mock_gateway: MockGateway, registry: FunctionRegistry, brain_with_context: CommandExecutor
+    ):
+        """新增 get_case_detail tool 应走正常 Brain 链路并返回评分历史。"""
+        router = MessageRouter(mock_gateway, brain=brain_with_context, allowed_users={"u1"})
+
+        async def fake_case_detail_handler(args: dict, ctx: CommandContext) -> dict:
+            return {
+                "case": {
+                    "id": args.get("case_id"),
+                    "query": "查询订单状态",
+                    "source": "manual",
+                    "category": "order",
+                    "difficulty": "medium",
+                    "review_status": "approved",
+                    "health_status": "healthy",
+                    "gold_answer": "返回最近订单物流状态",
+                    "expected_intent": {"name": "query_order"},
+                },
+                "score_summary": {"last_avg_score": 88.0, "run_count": 1},
+                "scores": [
+                    {
+                        "created_at": "2026-06-18T10:00:00",
+                        "status": "completed",
+                        "overall_score": 88.0,
+                        "scores": [{"layer": "intent", "score": 90.0}],
+                    }
+                ],
+            }
+
+        _register_fake_query_tool(registry, "get_case_detail", fake_case_detail_handler)
+
+        async def mock_parse(text, history):
+            return IntentResult(
+                function_name="get_case_detail",
+                arguments={"case_id": "case-001"},
+                risk_level="low",
+            )
+
+        brain_with_context._parser.parse = mock_parse
+
+        msg = IMMessage(
+            platform="mock", chat_id="c1", user_id="u1",
+            username="test", text="看一下 case-001", message_id="m1",
+        )
+        reply = await router.handle(msg)
+        assert reply is not None
+        assert "评测用例详情" in reply
+        assert "case-001" in reply
+        assert "最近评分历史" in reply
 
     @pytest.mark.asyncio
     async def test_brain_exception_propagates_to_router(
@@ -238,6 +393,22 @@ class TestGatewayBrainIntegration:
 
         call_count = [0]
 
+        async def fake_search_traces_handler(args: dict, ctx: CommandContext) -> dict:
+            return {
+                "total": 1,
+                "traces": [
+                    {
+                        "id": "trace-001",
+                        "agent_version": args.get("agent_version", "v2.3.1"),
+                        "overall_score": 86.0,
+                        "status": "success",
+                        "created_at": "2026-06-18T10:00:00",
+                    }
+                ],
+            }
+
+        _register_fake_query_tool(brain_with_context._registry, "search_traces", fake_search_traces_handler)
+
         async def mock_parse(text, history):
             call_count[0] += 1
             # 第二轮应包含历史
@@ -245,8 +416,8 @@ class TestGatewayBrainIntegration:
                 assert any(m["content"] == "查一下评分" for m in history)
                 assert any(m["content"] == "第一轮回复" for m in history)
             return IntentResult(
-                function_name="query_score_trend",
-                arguments={"agent_version": "v2.3.1", "last_n": 3},
+                function_name="search_traces",
+                arguments={"query_keyword": "评分", "agent_version": "v2.3.1"},
                 risk_level="low",
             )
 
@@ -437,8 +608,8 @@ class TestFullChainIntegration:
 
         registry.register(
             FunctionDef(
-                name="get_latest_eval_status",
-                description="获取评测状态",
+                name="list_cases",
+                description="查询评测用例列表",
                 parameters={"type": "object", "properties": {}, "required": []},
                 category="query",
                 risk_level="low",
@@ -453,7 +624,7 @@ class TestFullChainIntegration:
 
         async def mock_parse(text, history):
             return IntentResult(
-                function_name="get_latest_eval_status",
+                function_name="list_cases",
                 arguments={},
                 risk_level="low",
             )
@@ -462,7 +633,7 @@ class TestFullChainIntegration:
 
         msg = IMMessage(
             platform="mock", chat_id="c1", user_id="u1",
-            username="test", text="评测状态", message_id="m1",
+            username="test", text="列一下评测用例", message_id="m1",
         )
         await router.handle(msg)
 

@@ -23,26 +23,34 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 SYSTEM_PROMPT = """你是 agent-eval 评测系统的智能助手，运行在 Telegram 中。
-你可以帮助用户查询评测数据、触发评测任务、管理调度任务、查看报告。
+你可以帮助用户查询评测用例与 Trace、触发评测任务、管理调度任务。
 
 ## 你的能力
-- 查询评测状态、评分趋势、Trace 详情
-- 触发评测任务、手动采样评测
-- 管理后台调度任务（暂停/恢复/修改周期）
-- 查看日报、版本对比、弱点评分用例
-- 查询历史告警记录
+- 查询评测用例列表与单个用例详情
+- 搜索 Trace 与查看 Trace 详情
 - 列出测试用例集信息
+- 触发评测任务、手动采样评测
+- 查看、触发、暂停、恢复后台 Scheduler Job，并查看 Job 详情和执行日志
 
 ## 路由规则
 1. 如果用户意图明确匹配某个可用函数 → 调用对应 function
 2. 如果用户问题与评测系统无关 → 调用 fallback_chat，友好说明你的能力范围
-3. 如果参数不完整 → 尝试从上下文推断（如对话历史中的版本号、日期）
-4. 仅做查询/报告，不主动执行高风险操作，需用户明确指令
+3. 如果参数不完整 → 尝试从上下文推断（如对话历史中的 case_id、trace_id、分类）
+4. 仅做查询，不主动执行高风险操作，需用户明确指令
 
 ## 当前上下文
 - 项目: agent-eval 评测系统
 - 可查询的数据: eval_cases, case_sets, eval_tasks, eval_runs, traces, spans, eval_scores
 - 支持的评测层: intent, retrieval, tool, generation, outcome
+"""
+
+FINAL_RESPONSE_SYSTEM_PROMPT = SYSTEM_PROMPT + """
+
+## 最终回复规则
+你现在处于工具调用完成后的最终回答阶段。
+工具结果已经作为 tool message 提供给你。
+请直接回答用户问题，只基于工具结果，不要编造不存在的数据。
+输出纯文本，不要输出 HTML 标签、Markdown 表格或代码块。
 """
 
 # 兜底 function 定义
@@ -87,7 +95,7 @@ class LLMIntentParser:
             api_key="sk-xxx",
             base_url="https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
         )
-        intent = await parser.parse("查一下 v2.3.1 的评分趋势")
+        intent = await parser.parse("列一下订单相关评测用例")
     """
 
     def __init__(
@@ -140,6 +148,84 @@ class LLMIntentParser:
         # 解析 tool_calls
         return self._parse_tool_calls(raw_response)
 
+    async def complete_with_tool_result(
+        self,
+        *,
+        user_text: str,
+        intent: IntentResult,
+        tool_result: Any,
+        history: Optional[List[Dict[str, str]]] = None,
+        max_result_chars: int = 4000,
+    ) -> str:
+        """基于工具调用结果生成最终 LLM 回复。
+
+        Args:
+            user_text: 当前用户输入。
+            intent: 已解析出的工具调用意图。
+            tool_result: 工具返回的结构化结果。
+            history: 当前会话历史，用于理解多轮上下文。
+            max_result_chars: 传给 LLM 的工具结果最大字符数。
+
+        Returns:
+            最终面向用户的纯文本回复。调用失败由上层降级处理。
+        """
+        result_json = json.dumps(tool_result, ensure_ascii=False, default=str)
+        if len(result_json) > max_result_chars:
+            result_json = f"{result_json[:max_result_chars]}\n...<truncated>"
+
+        args_json = json.dumps(intent.arguments, ensure_ascii=False, default=str)
+        tool_call_id = self._tool_call_id(intent)
+        messages: List[Dict[str, Any]] = [
+            {"role": "system", "content": FINAL_RESPONSE_SYSTEM_PROMPT},
+        ]
+        if history:
+            truncated = history[-self._max_history :] if len(history) > self._max_history else history
+            messages.extend(truncated)
+
+        messages.extend([
+            {"role": "user", "content": user_text},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": tool_call_id,
+                        "type": "function",
+                        "function": {
+                            "name": intent.function_name,
+                            "arguments": args_json,
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": tool_call_id,
+                "content": result_json,
+            },
+        ])
+
+        raw_response = await self._call_llm_with_retry(messages, tools=None)
+        choices = raw_response.get("choices", [])
+        if not choices:
+            return ""
+        message = choices[0].get("message", {})
+        return str(message.get("content", "")).strip()
+
+    def _tool_call_id(self, intent: IntentResult) -> str:
+        """从原始响应中提取 tool_call id；测试或兜底场景生成稳定 id。"""
+        try:
+            choices = (intent.raw_response or {}).get("choices", [])
+            message = choices[0].get("message", {})
+            tool_calls = message.get("tool_calls") or []
+            tool_call = tool_calls[0] if isinstance(tool_calls, list) else tool_calls
+            tool_call_id = tool_call.get("id")
+            if tool_call_id:
+                return str(tool_call_id)
+        except (AttributeError, IndexError, KeyError, TypeError):
+            pass
+        return f"call_{intent.function_name}"
+
     # ------------------------------------------------------------------
     # 内部方法
     # ------------------------------------------------------------------
@@ -166,8 +252,8 @@ class LLMIntentParser:
 
     async def _call_llm_with_retry(
         self,
-        messages: List[Dict[str, str]],
-        tools: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         """调用 LLM API，支持重试。"""
         last_error = None
@@ -192,17 +278,18 @@ class LLMIntentParser:
 
     async def _call_llm(
         self,
-        messages: List[Dict[str, str]],
-        tools: List[Dict[str, Any]],
+        messages: List[Dict[str, Any]],
+        tools: Optional[List[Dict[str, Any]]],
     ) -> Dict[str, Any]:
         """单次 LLM API 调用。"""
         body: Dict[str, Any] = {
             "model": self._model,
             "messages": messages,
             "temperature": self._temperature,
-            "tools": tools,
-            "tool_choice": "auto",
         }
+        if tools is not None:
+            body["tools"] = tools
+            body["tool_choice"] = "auto"
 
         headers = {
             "Content-Type": "application/json",
@@ -211,7 +298,7 @@ class LLMIntentParser:
 
         url = f"{self._base_url}/chat/completions"
         logger.debug("LLM Intent 调用: model=%s messages=%d tools=%d",
-                     self._model, len(messages), len(tools))
+                     self._model, len(messages), len(tools or []))
 
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             resp = await client.post(url, json=body, headers=headers)

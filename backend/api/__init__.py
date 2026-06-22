@@ -12,6 +12,7 @@ from backend.api.cases import router as cases_router
 from backend.api.stats import router as stats_router
 from backend.api.case_sets import router as case_sets_router
 from backend.api.alerts import router as alerts_router
+from backend.api.brain import router as brain_router
 from backend.workers import IngestWorker
 
 from fastapi.staticfiles import StaticFiles
@@ -44,6 +45,7 @@ app.include_router(cases_router)
 app.include_router(stats_router)
 app.include_router(case_sets_router)
 app.include_router(alerts_router)
+app.include_router(brain_router)
 
 # ── Dashboard 静态页面 ──────────────────────────────────────────
 _dashboard_dir = Path(__file__).resolve().parent.parent / "dashboard"

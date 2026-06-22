@@ -327,11 +327,28 @@ class TestJobManagerPauseResume:
         # 验证 job 在 APScheduler 中已暂停
         aps_job = manager._scheduler.get_job("test.simple")
         assert aps_job.next_run_time is None  # 暂停后无下次触发时间
+        assert manager.list_jobs()[0].enabled is False
 
         manager.resume("test.simple")
         aps_job = manager._scheduler.get_job("test.simple")
         assert aps_job.next_run_time is not None  # 恢复后有下次触发时间
+        assert manager.list_jobs()[0].enabled is True
 
+        manager._scheduler.shutdown(wait=False)
+
+    @pytest.mark.asyncio
+    async def test_pause_already_paused_is_idempotent(self, manager):
+        job = SimpleJob()
+        manager.register(job)
+        manager._scheduler.start()
+        manager._started = True
+
+        manager.pause("test.simple")
+        manager._scheduler.remove_job("test.simple")
+
+        manager.pause("test.simple")
+
+        assert manager.list_jobs()[0].enabled is False
         manager._scheduler.shutdown(wait=False)
 
     @pytest.mark.asyncio

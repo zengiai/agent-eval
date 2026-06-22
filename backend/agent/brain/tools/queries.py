@@ -1,4 +1,4 @@
-"""查询类 Tool Handler —— 6 个评测数据查询工具。
+"""查询类 Tool Handler —— 基础 trace 和 case 查询工具。
 
 每个 handler 通过 EvalAPIClient 调用 eval-api 获取数据，
 不再直接连接数据库。handler 保留参数校验，将请求转发给 API 客户端。
@@ -21,40 +21,43 @@ def _get_client(context: Any) -> EvalAPIClient:
 
 
 # ===================================================================
-# Tool 1: get_latest_eval_status
+# Tool 1: list_cases
 # ===================================================================
 
-async def get_latest_eval_status(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """获取最近评测任务的全局状态概览。
+async def list_cases(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """查询评测用例列表，支持多条件筛选。
 
     Returns:
-        {"total_tasks": int, "status_counts": dict, "avg_overall_score": float,
-         "active_versions": [str], "hours_back": int}
+        {"total": int, "items": [...]}
     """
     client = _get_client(context)
-    return await client.get_eval_status(
-        agent_version=args.get("agent_version"),
-        hours_back=int(args.get("hours_back", 24)),
+    return await client.list_cases(
+        source=args.get("source"),
+        category=args.get("category"),
+        difficulty=args.get("difficulty"),
+        review_status=args.get("review_status"),
+        health_status=args.get("health_status"),
+        search=args.get("search"),
+        limit=int(args.get("limit", 20)),
     )
 
 
 # ===================================================================
-# Tool 2: query_score_trend
+# Tool 2: get_case_detail
 # ===================================================================
 
-async def query_score_trend(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """查询指定 Agent 版本最近 N 次评测的得分趋势。
+async def get_case_detail(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
+    """获取单个评测用例的完整详情及评分历史。
 
     Returns:
-        {"version": str, "layer": str, "trend": [...], "last_n": int, "delta": float}
+        {"case": dict, "scores": [...]}
     """
+    case_id = args.get("case_id", "")
+    if not case_id:
+        raise ValueError("case_id 是必填参数")
+
     client = _get_client(context)
-    return await client.query_score_trend(
-        agent_version=args.get("agent_version"),
-        last_n=int(args.get("last_n", 5)),
-        layer=args.get("layer", "overall"),
-        case_set_name=args.get("case_set_name"),
-    )
+    return await client.get_case_detail(case_id)
 
 
 # ===================================================================
@@ -111,22 +114,4 @@ async def list_case_sets(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
     return await client.list_case_sets(
         category=args.get("category"),
         search=args.get("search"),
-    )
-
-
-# ===================================================================
-# Tool 6: get_weakest_cases
-# ===================================================================
-
-async def get_weakest_cases(args: Dict[str, Any], context: Any) -> Dict[str, Any]:
-    """找出当前评分最低的测试用例（退化热点）。
-
-    Returns:
-        {"cases": [...], "top_n": int, "layer": str}
-    """
-    client = _get_client(context)
-    return await client.get_weakest_cases(
-        agent_version=args.get("agent_version"),
-        top_n=int(args.get("top_n", 10)),
-        layer=args.get("layer", "overall"),
     )

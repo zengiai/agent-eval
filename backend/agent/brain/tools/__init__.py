@@ -1,5 +1,6 @@
-"""AgentBrain 工具集 —— 12 个 Function Calling Tool 定义与 handler 注册。
+"""AgentBrain 工具集 —— 基础查询工具与操作工具定义与 handler 注册。
 
+查询工具聚焦 case、trace、case set；操作工具保留评测触发、采样评测、调度管理。
 通过 ``register_all(registry)`` 一键注册所有工具到 FunctionRegistry。
 """
 
@@ -8,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from backend.agent.brain.base import FunctionDef
-from backend.agent.brain.tools import actions, queries, reports
+from backend.agent.brain.tools import actions, queries
 
 if TYPE_CHECKING:
     from backend.agent.brain.registry import FunctionRegistry
@@ -20,20 +21,41 @@ if TYPE_CHECKING:
 
 # ── 查询工具 (queries) ──
 
-FUNC_GET_LATEST_EVAL_STATUS = FunctionDef(
-    name="get_latest_eval_status",
-    description="获取最近评测任务的全局状态概览：各状态任务数、平均分、活跃版本",
+FUNC_LIST_CASES = FunctionDef(
+    name="list_cases",
+    description="查询评测用例列表，支持按来源、分类、难度、状态筛选",
     parameters={
         "type": "object",
         "properties": {
-            "agent_version": {
+            "source": {
                 "type": "string",
-                "description": "Agent 版本号（可选，不填返回所有版本汇总）",
+                "description": "用例来源：manual/trace/sampling",
             },
-            "hours_back": {
+            "category": {
+                "type": "string",
+                "description": "用例分类",
+            },
+            "difficulty": {
+                "type": "string",
+                "enum": ["easy", "medium", "hard"],
+                "description": "难度等级",
+            },
+            "review_status": {
+                "type": "string",
+                "description": "审核状态",
+            },
+            "health_status": {
+                "type": "string",
+                "description": "健康状态",
+            },
+            "search": {
+                "type": "string",
+                "description": "搜索 query 关键词",
+            },
+            "limit": {
                 "type": "integer",
-                "description": "查询过去多少小时内的数据",
-                "default": 24,
+                "description": "返回条数上限",
+                "default": 20,
             },
         },
         "required": [],
@@ -42,33 +64,18 @@ FUNC_GET_LATEST_EVAL_STATUS = FunctionDef(
     risk_level="low",
 )
 
-FUNC_QUERY_SCORE_TREND = FunctionDef(
-    name="query_score_trend",
-    description="查询指定 Agent 版本最近 N 次评测的得分趋势（总分 + 各层得分变化）",
+FUNC_GET_CASE_DETAIL = FunctionDef(
+    name="get_case_detail",
+    description="获取单个评测用例的完整详情：查询内容、期望标注、评分历史",
     parameters={
         "type": "object",
         "properties": {
-            "agent_version": {
+            "case_id": {
                 "type": "string",
-                "description": "Agent 版本号，如 v2.3.1。不填则查询所有版本",
-            },
-            "last_n": {
-                "type": "integer",
-                "description": "查询最近 N 次评测",
-                "default": 5,
-            },
-            "layer": {
-                "type": "string",
-                "enum": ["overall", "intent", "retrieval", "tool", "generation", "outcome"],
-                "description": "指定评测层。overall 表示加权总分",
-                "default": "overall",
-            },
-            "case_set_name": {
-                "type": "string",
-                "description": "限定测试集名称（可选）",
+                "description": "用例 ID",
             },
         },
-        "required": [],
+        "required": ["case_id"],
     },
     category="query",
     risk_level="low",
@@ -76,7 +83,7 @@ FUNC_QUERY_SCORE_TREND = FunctionDef(
 
 FUNC_SEARCH_TRACES = FunctionDef(
     name="search_traces",
-    description="按关键词搜索 Trace 记录，支持按来源、分数范围、状态筛选",
+    description="按关键词搜索 Trace 记录，支持按来源、分数范围、状态、版本筛选",
     parameters={
         "type": "object",
         "properties": {
@@ -101,6 +108,10 @@ FUNC_SEARCH_TRACES = FunctionDef(
                 "type": "string",
                 "enum": ["success", "error", "timeout", "partial"],
                 "description": "Trace 执行状态",
+            },
+            "agent_version": {
+                "type": "string",
+                "description": "Agent 版本号",
             },
             "limit": {
                 "type": "integer",
@@ -144,34 +155,6 @@ FUNC_LIST_CASE_SETS = FunctionDef(
             "search": {
                 "type": "string",
                 "description": "按名称模糊搜索（可选）",
-            },
-        },
-        "required": [],
-    },
-    category="query",
-    risk_level="low",
-)
-
-FUNC_GET_WEAKEST_CASES = FunctionDef(
-    name="get_weakest_cases",
-    description="找出当前评分最低的测试用例（退化热点），帮助定位 Agent 短板",
-    parameters={
-        "type": "object",
-        "properties": {
-            "agent_version": {
-                "type": "string",
-                "description": "Agent 版本号（可选）",
-            },
-            "top_n": {
-                "type": "integer",
-                "description": "返回最低分的 N 个用例",
-                "default": 10,
-            },
-            "layer": {
-                "type": "string",
-                "enum": ["overall", "intent", "retrieval", "tool", "generation", "outcome"],
-                "description": "按指定层排序，overall 按总分排",
-                "default": "overall",
             },
         },
         "required": [],
@@ -239,6 +222,109 @@ FUNC_SAMPLE_AND_EVALUATE = FunctionDef(
     risk_level="medium",
 )
 
+FUNC_LIST_SCHEDULER_JOBS = FunctionDef(
+    name="list_scheduler_jobs",
+    description="查看当前 Scheduler 已注册的后台任务列表，包括任务 ID、名称、触发器、启用状态",
+    parameters={
+        "type": "object",
+        "properties": {},
+        "required": [],
+    },
+    category="query",
+    risk_level="low",
+)
+
+FUNC_TRIGGER_SCHEDULER_JOB = FunctionDef(
+    name="trigger_scheduler_job",
+    description="立即触发一个已注册的 Scheduler Job，不影响原有定时周期",
+    parameters={
+        "type": "object",
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "要触发的 Job ID，如 sampling.hourly、report.daily、alert.check",
+            },
+        },
+        "required": ["job_id"],
+    },
+    category="action",
+    risk_level="medium",
+)
+
+FUNC_PAUSE_SCHEDULER_JOB = FunctionDef(
+    name="pause_scheduler_job",
+    description="暂停一个或多个已注册的 Scheduler Job，保留任务配置但停止后续定时触发",
+    parameters={
+        "type": "object",
+        "properties": {
+            "job_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "要暂停的 Job ID 列表，如 [\"sampling.hourly\", \"report.daily\"]",
+            },
+            "job_id": {
+                "type": "string",
+                "description": "兼容旧参数：单个要暂停的 Job ID，如 sampling.hourly",
+            },
+            "all_jobs": {
+                "type": "boolean",
+                "description": "是否暂停所有已注册的 Scheduler Job。用户说暂停全部、停用所有定时任务时传 true",
+            },
+        },
+        "required": [],
+    },
+    category="action",
+    risk_level="medium",
+)
+
+FUNC_RESUME_SCHEDULER_JOB = FunctionDef(
+    name="resume_scheduler_job",
+    description="恢复一个或多个已暂停的 Scheduler Job，使其重新按原调度周期触发",
+    parameters={
+        "type": "object",
+        "properties": {
+            "job_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "要恢复的 Job ID 列表，如 [\"sampling.hourly\", \"report.daily\"]",
+            },
+            "job_id": {
+                "type": "string",
+                "description": "兼容旧参数：单个要恢复的 Job ID，如 sampling.hourly",
+            },
+            "all_jobs": {
+                "type": "boolean",
+                "description": "是否恢复所有已注册的 Scheduler Job。用户说恢复全部、启用所有定时任务时传 true",
+            },
+        },
+        "required": [],
+    },
+    category="action",
+    risk_level="medium",
+)
+
+FUNC_GET_SCHEDULER_JOB_DETAIL = FunctionDef(
+    name="get_scheduler_job_detail",
+    description="查看指定 Scheduler Job 的详情，包括任务参数、运行时状态和最近执行日志记录",
+    parameters={
+        "type": "object",
+        "properties": {
+            "job_id": {
+                "type": "string",
+                "description": "要查看的 Job ID，如 sampling.hourly、report.daily、alert.check",
+            },
+            "history_limit": {
+                "type": "integer",
+                "description": "返回最近多少条执行日志，默认 10，最大 50",
+                "default": 10,
+            },
+        },
+        "required": ["job_id"],
+    },
+    category="query",
+    risk_level="low",
+)
+
 FUNC_MANAGE_SCHEDULER = FunctionDef(
     name="manage_scheduler",
     description="管理后台调度任务：查看状态、暂停、恢复、立即触发、修改周期、查看执行历史",
@@ -254,6 +340,15 @@ FUNC_MANAGE_SCHEDULER = FunctionDef(
                 "type": "string",
                 "description": "任务 ID（如 sampling.hourly）。list 时可选，其他操作必填",
             },
+            "job_ids": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "任务 ID 列表。pause/resume 可用，兼容批量操作",
+            },
+            "all_jobs": {
+                "type": "boolean",
+                "description": "是否对所有已注册任务生效。用户说全部、所有时传 true",
+            },
             "new_trigger_value": {
                 "type": "string",
                 "description": "新的调度值（仅 action=update 时需要）。cron 表达式或秒数（间隔模式）",
@@ -265,107 +360,29 @@ FUNC_MANAGE_SCHEDULER = FunctionDef(
     risk_level="medium",
 )
 
-# ── 报告工具 (reports) ──
-
-FUNC_COMPARE_VERSIONS = FunctionDef(
-    name="compare_versions",
-    description="对比两个 Agent 版本的评测得分（各层得分差异 + 总分变化）",
-    parameters={
-        "type": "object",
-        "properties": {
-            "version_a": {
-                "type": "string",
-                "description": "基准版本号",
-            },
-            "version_b": {
-                "type": "string",
-                "description": "对比版本号",
-            },
-            "case_set_name": {
-                "type": "string",
-                "description": "限定特定测试集（可选，不填则全局对比）",
-            },
-        },
-        "required": ["version_a", "version_b"],
-    },
-    category="report",
-    risk_level="low",
-)
-
-FUNC_GET_DAILY_REPORT = FunctionDef(
-    name="get_daily_report",
-    description="获取指定日期的评测日报摘要：评测量、平均分、各层得分、告警统计",
-    parameters={
-        "type": "object",
-        "properties": {
-            "date": {
-                "type": "string",
-                "description": "日期，格式 YYYY-MM-DD。默认为昨天",
-            },
-            "agent_version": {
-                "type": "string",
-                "description": "可选版本筛选",
-            },
-        },
-        "required": [],
-    },
-    category="report",
-    risk_level="low",
-)
-
-FUNC_GET_ALERT_HISTORY = FunctionDef(
-    name="get_alert_history",
-    description="查询历史告警记录，了解系统健康状态和异常模式",
-    parameters={
-        "type": "object",
-        "properties": {
-            "severity": {
-                "type": "string",
-                "enum": ["info", "warning", "critical"],
-                "description": "按严重级别筛选",
-            },
-            "hours_back": {
-                "type": "integer",
-                "description": "查询过去多少小时",
-                "default": 24,
-            },
-            "limit": {
-                "type": "integer",
-                "description": "返回条数上限",
-                "default": 20,
-            },
-        },
-        "required": [],
-    },
-    category="report",
-    risk_level="low",
-)
-
 
 # ===================================================================
 # 注册函数
 # ===================================================================
 
 def register_all(registry: "FunctionRegistry") -> None:
-    """将所有 12 个工具注册到 FunctionRegistry。
+    """将 Brain 工具注册到 FunctionRegistry。
 
     Args:
         registry: FunctionRegistry 实例。
     """
     registry.register_batch([
-        # 查询类 (6)
-        (FUNC_GET_LATEST_EVAL_STATUS, queries.get_latest_eval_status),
-        (FUNC_QUERY_SCORE_TREND, queries.query_score_trend),
+        (FUNC_LIST_CASES, queries.list_cases),
+        (FUNC_GET_CASE_DETAIL, queries.get_case_detail),
         (FUNC_SEARCH_TRACES, queries.search_traces),
         (FUNC_GET_TRACE_DETAIL, queries.get_trace_detail),
         (FUNC_LIST_CASE_SETS, queries.list_case_sets),
-        (FUNC_GET_WEAKEST_CASES, queries.get_weakest_cases),
-        # 操作类 (3)
         (FUNC_TRIGGER_EVALUATION, actions.trigger_evaluation),
         (FUNC_SAMPLE_AND_EVALUATE, actions.sample_and_evaluate),
+        (FUNC_LIST_SCHEDULER_JOBS, actions.list_scheduler_jobs),
+        (FUNC_TRIGGER_SCHEDULER_JOB, actions.trigger_scheduler_job),
+        (FUNC_PAUSE_SCHEDULER_JOB, actions.pause_scheduler_job),
+        (FUNC_RESUME_SCHEDULER_JOB, actions.resume_scheduler_job),
+        (FUNC_GET_SCHEDULER_JOB_DETAIL, actions.get_scheduler_job_detail),
         (FUNC_MANAGE_SCHEDULER, actions.manage_scheduler),
-        # 报告类 (3)
-        (FUNC_COMPARE_VERSIONS, reports.compare_versions),
-        (FUNC_GET_DAILY_REPORT, reports.get_daily_report),
-        (FUNC_GET_ALERT_HISTORY, reports.get_alert_history),
     ])

@@ -58,6 +58,18 @@ class Settings(BaseSettings):
     DISPATCHER_MODEL: str = "qwen3.7-max"
     DISPATCHER_MAX_HISTORY: int = 10
 
+    # Runtime Web Brain bridge（仅本机调试入口）
+    AGENT_RUNTIME_WEB_ENABLED: bool = True
+    AGENT_RUNTIME_WEB_HOST: str = "127.0.0.1"
+    AGENT_RUNTIME_WEB_PORT: int = 19090
+    AGENT_RUNTIME_WEB_DEBUG_USER: str = ""
+    AGENT_RUNTIME_WEB_TIMEOUT: float = 35.0
+
+    @property
+    def agent_runtime_web_base_url(self) -> str:
+        """eval-api 代理到 agent_runtime Web bridge 的基础地址。"""
+        return f"http://{self.AGENT_RUNTIME_WEB_HOST}:{self.AGENT_RUNTIME_WEB_PORT}"
+
     model_config = {
         "env_file": str(Path(__file__).resolve().parent.parent / ".env"),
         "extra": "ignore",

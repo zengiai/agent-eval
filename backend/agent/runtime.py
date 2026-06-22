@@ -22,6 +22,7 @@ from backend.agent.brain.registry import FunctionRegistry
 from backend.agent.brain.tools import register_all
 from backend.agent.gateway.router import MessageRouter
 from backend.agent.gateway.telegram import TelegramGateway
+from backend.agent.runtime_web import RuntimeWebServer, create_runtime_web_app
 from backend.agent.scheduler.jobs import (
     AlertCheckJob,
     DailyReportJob,
@@ -50,6 +51,10 @@ class RuntimeConfig:
     llm_temperature: float
     llm_max_retries: int
     dispatcher_max_history: int
+    runtime_web_enabled: bool
+    runtime_web_host: str
+    runtime_web_port: int
+    runtime_web_debug_user: str
 
     @classmethod
     def from_settings(cls) -> "RuntimeConfig":
@@ -80,6 +85,10 @@ class RuntimeConfig:
             llm_temperature=settings.LLM_TEMPERATURE,
             llm_max_retries=settings.LLM_MAX_RETRIES,
             dispatcher_max_history=settings.DISPATCHER_MAX_HISTORY,
+            runtime_web_enabled=settings.AGENT_RUNTIME_WEB_ENABLED,
+            runtime_web_host=settings.AGENT_RUNTIME_WEB_HOST,
+            runtime_web_port=settings.AGENT_RUNTIME_WEB_PORT,
+            runtime_web_debug_user=settings.AGENT_RUNTIME_WEB_DEBUG_USER.strip(),
         )
 
 
@@ -171,6 +180,13 @@ def build_brain(
     )
 
 
+def _runtime_web_default_user(config: RuntimeConfig) -> str:
+    """选择 Web bridge 默认调试身份，确保能通过 Router 白名单。"""
+    if config.runtime_web_debug_user:
+        return config.runtime_web_debug_user
+    return sorted(config.telegram_allowed_users)[0]
+
+
 async def run_runtime(
     config: RuntimeConfig,
     stop_event: asyncio.Event | None = None,
@@ -199,6 +215,7 @@ async def run_runtime(
         scheduler=scheduler,
         allowed_users=config.telegram_allowed_users,
     )
+    runtime_web: RuntimeWebServer | None = None
 
     gateway.on_message(router.handle)
     scheduler.set_context(gateway=gateway, config={"runtime": "agent_runtime"})
@@ -206,6 +223,21 @@ async def run_runtime(
     try:
         await scheduler.start()
         logger.info("Scheduler started, jobs=%d", scheduler.job_count)
+
+        if config.runtime_web_enabled:
+            runtime_web_app = create_runtime_web_app(
+                message_router=router,
+                brain=brain,
+                scheduler=scheduler,
+                default_user=_runtime_web_default_user(config),
+                model=config.dispatcher_model,
+            )
+            runtime_web = RuntimeWebServer(
+                runtime_web_app,
+                host=config.runtime_web_host,
+                port=config.runtime_web_port,
+            )
+            await runtime_web.start()
 
         await gateway.start()
         logger.info(
@@ -219,6 +251,8 @@ async def run_runtime(
         logger.info("Agent runtime shutdown signal received")
     finally:
         clear_ready()
+        if runtime_web is not None:
+            await runtime_web.stop()
         try:
             await gateway.stop()
         finally:

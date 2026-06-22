@@ -140,7 +140,7 @@ def _case_to_response(
         expected_answer=c.expected_answer,
         review_status=c.review_status,
         run_count=c.run_count,
-        last_avg_score=float(c.last_avg_score) if c.last_avg_score else None,
+        last_avg_score=float(c.last_avg_score) if c.last_avg_score is not None else None,
         health_status=c.health_status,
         is_active=c.is_active,
         latest_run_status=latest_run_status,
@@ -332,6 +332,12 @@ async def list_traces_for_case_conversion(
         stmt = stmt.where(Trace.overall_score <= max_score)
     if agent_version:
         stmt = stmt.where(Trace.agent_version == agent_version)
+    if only_without_case:
+        stmt = stmt.where(
+            ~select(EvalCase.id)
+            .where(EvalCase.source_trace_id == Trace.id)
+            .exists()
+        )
 
     # 计数
     count_stmt = select(func.count()).select_from(stmt.subquery())
@@ -356,8 +362,6 @@ async def list_traces_for_case_conversion(
 
     items = []
     for t in traces:
-        if only_without_case and t.id in trace_to_case:
-            continue
         case_id = trace_to_case.get(t.id)
         items.append(TraceBrief(
             id=str(t.id),
@@ -365,16 +369,12 @@ async def list_traces_for_case_conversion(
             query=t.query,
             source=t.source,
             status=t.status,
-            overall_score=float(t.overall_score) if t.overall_score else None,
+            overall_score=float(t.overall_score) if t.overall_score is not None else None,
             total_latency_ms=t.total_latency_ms,
             created_at=t.created_at,
             already_case=case_id is not None,
             case_id=case_id,
         ))
-
-    # 重新计算 total（如果过滤了）
-    if only_without_case:
-        total = len(items)
 
     return TraceListResponse(total=total, items=items)
 
@@ -423,7 +423,7 @@ async def get_trace_detail(
             "status": trace.status,
             "source": trace.source,
             "final_response": trace.final_response,
-            "overall_score": float(trace.overall_score) if trace.overall_score else None,
+            "overall_score": float(trace.overall_score) if trace.overall_score is not None else None,
             "total_latency_ms": trace.total_latency_ms,
             "total_tokens": trace.total_tokens,
             "created_at": trace.created_at.isoformat() if trace.created_at else None,
@@ -440,7 +440,7 @@ async def get_trace_detail(
                 "latency_ms": sp.latency_ms,
                 "tokens": sp.tokens,
                 "model": sp.model,
-                "score": float(sp.score) if sp.score else None,
+                "score": float(sp.score) if sp.score is not None else None,
                 "tool_name": sp.tool_name,
                 "tool_params": sp.tool_params,
                 "tool_result": sp.tool_result,
@@ -755,7 +755,11 @@ async def get_case_scores(case_id: str, db: AsyncSession = Depends(get_db)):
         overall_score = None
         if run.trace_id:
             trace = await db.get(Trace, run.trace_id)
-            overall_score = float(trace.overall_score) if trace and trace.overall_score else None
+            overall_score = (
+                float(trace.overall_score)
+                if trace and trace.overall_score is not None
+                else None
+            )
 
         history.append({
             "run_id": str(run.id),
@@ -784,7 +788,7 @@ async def get_case_scores(case_id: str, db: AsyncSession = Depends(get_db)):
     return {
         "case_id": str(case.id),
         "query": case.query,
-        "last_avg_score": float(case.last_avg_score) if case.last_avg_score else None,
+        "last_avg_score": float(case.last_avg_score) if case.last_avg_score is not None else None,
         "run_count": case.run_count,
         "history": history,
     }

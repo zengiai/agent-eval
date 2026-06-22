@@ -46,7 +46,7 @@ class IMMessage:
     """发送者名称，用于日志/审计。"""
 
     text: str
-    """消息正文（纯文本，Markdown 符号保留）。"""
+    """消息正文（平台原始文本，格式化符号保留）。"""
 
     message_id: str
     """平台原生消息 ID，用于去重、引用回复。"""
@@ -134,23 +134,22 @@ class IMGateway(ABC):
         ...
 
     @abstractmethod
-    async def send_markdown(
+    async def send_html(
         self,
         chat_id: str,
-        markdown: str,
+        html: str,
         reply_to: Optional[str] = None,
     ) -> str:
-        """发送 Markdown 格式消息。
+        """发送 HTML 格式消息。
 
-        支持的 Markdown 子集（Telegram MarkdownV2 兼容）：
-        - **粗体**、*斜体*、``行内代码``
-        - 无序列表、有序列表
-        - [链接](url)
-        - ```代码块```
+        支持平台允许的 HTML 子集；Telegram 常用标签包括：
+        - ``<b>``、``<i>``、``<u>``、``<s>``
+        - ``<code>``、``<pre>``
+        - ``<a href="...">``
 
         Args:
             chat_id: 目标会话 ID。
-            markdown: Markdown 文本。
+            html: HTML 文本。
             reply_to: 可选，引用回复的消息 ID。
 
         Returns:

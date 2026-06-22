@@ -35,7 +35,7 @@ class FunctionDef:
     """
 
     name: str
-    """函数名，全局唯一，如 ``"query_score_trend"``"""
+    """函数名，全局唯一，如 ``"list_cases"``"""
 
     description: str
     """描述，LLM 用于判断调用哪个 function。需简明描述能力、参数和返回值。"""
@@ -68,7 +68,7 @@ class IntentResult:
     """
 
     function_name: str
-    """LLM 选择的 function 名称，如 ``"query_score_trend"``"""
+    """LLM 选择的 function 名称，如 ``"list_cases"``"""
 
     arguments: Dict[str, Any]
     """LLM 从用户消息中提取的参数，已解析为 dict"""

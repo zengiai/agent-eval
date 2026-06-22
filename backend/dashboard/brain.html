@@ -1,0 +1,495 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Eval · Brain Console</title>
+<style>
+  :root {
+    --bg: #f4f6f8;
+    --panel: #ffffff;
+    --panel-soft: #f8fafc;
+    --text: #172033;
+    --muted: #667085;
+    --border: #d9e0ea;
+    --primary: #2563eb;
+    --primary-hover: #1d4ed8;
+    --green: #059669;
+    --red: #dc2626;
+    --amber: #b45309;
+    --code: #0f172a;
+    --radius: 8px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+  }
+  .topbar {
+    height: 58px;
+    padding: 0 22px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 14px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+  }
+  .brand { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
+  .brand h1 { margin: 0; font-size: 18px; line-height: 1.2; font-weight: 700; }
+  .brand span { color: var(--muted); font-size: 12px; white-space: nowrap; }
+  .top-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+  .link-btn, .btn {
+    min-height: 34px;
+    padding: 7px 12px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 13px;
+    font-weight: 600;
+    text-decoration: none;
+    cursor: pointer;
+  }
+  .link-btn:hover, .btn:hover { border-color: var(--primary); color: var(--primary); }
+  .btn-primary { border-color: var(--primary); background: var(--primary); color: #fff; }
+  .btn-primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+  .btn-danger:hover { border-color: var(--red); color: var(--red); }
+  .btn:disabled { opacity: .55; cursor: not-allowed; }
+
+  .layout {
+    height: calc(100vh - 58px);
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 310px;
+    gap: 16px;
+    padding: 16px;
+  }
+  .chat-panel, .side-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    min-width: 0;
+  }
+  .chat-panel { display: flex; flex-direction: column; min-height: 0; }
+  .chat-header {
+    padding: 12px 16px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid var(--border);
+    gap: 10px;
+  }
+  .status-line { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 12px; min-width: 0; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); flex: 0 0 auto; }
+  .dot.ready { background: var(--green); }
+  .dot.error { background: var(--red); }
+  .session-pill {
+    padding: 3px 8px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--panel-soft);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    color: var(--muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .messages {
+    flex: 1;
+    overflow: auto;
+    padding: 18px;
+    min-height: 0;
+  }
+  .empty {
+    height: 100%;
+    min-height: 240px;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .msg { display: flex; margin: 0 0 14px; }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: min(780px, 82%);
+    padding: 11px 13px;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    line-height: 1.58;
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.user .bubble { background: #eaf2ff; border-color: #bfdbfe; }
+  .msg.brain .bubble { background: var(--panel-soft); }
+  .bubble.loading { color: var(--muted); }
+  .bubble.error { background: #fff1f2; border-color: #fecdd3; color: var(--red); }
+  .bubble code {
+    padding: 1px 5px;
+    border-radius: 4px;
+    background: #e2e8f0;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+  }
+  .bubble pre {
+    margin: 8px 0 0;
+    padding: 10px;
+    border-radius: 6px;
+    overflow: auto;
+    background: var(--code);
+    color: #e5e7eb;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 12px;
+    white-space: pre-wrap;
+  }
+  .meta {
+    margin-top: 5px;
+    color: var(--muted);
+    font-size: 11px;
+    text-align: right;
+  }
+  .composer {
+    padding: 14px;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 10px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+  }
+  textarea {
+    width: 100%;
+    min-height: 76px;
+    max-height: 180px;
+    resize: vertical;
+    padding: 11px 12px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    outline: none;
+    font: inherit;
+    line-height: 1.45;
+    color: var(--text);
+    background: #fff;
+  }
+  textarea:focus, input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,.12); }
+  .send-stack { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+
+  .side-panel { padding: 14px; overflow: auto; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; margin-bottom: 6px; color: var(--muted); font-size: 12px; font-weight: 700; }
+  input {
+    width: 100%;
+    height: 36px;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    outline: none;
+    color: var(--text);
+    background: #fff;
+    font: inherit;
+  }
+  .side-row { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-bottom: 14px; }
+  .metric {
+    padding: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--panel-soft);
+  }
+  .metric .label { color: var(--muted); font-size: 11px; font-weight: 700; }
+  .metric .value { margin-top: 3px; font-size: 15px; font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .toast {
+    position: fixed;
+    right: 18px;
+    top: 72px;
+    max-width: 360px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    background: var(--code);
+    color: #fff;
+    font-size: 13px;
+    transform: translateX(120%);
+    transition: transform .2s ease;
+    z-index: 10;
+  }
+  .toast.show { transform: translateX(0); }
+  .toast.error { background: var(--red); }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; height: auto; min-height: calc(100vh - 58px); }
+    .chat-panel { min-height: 68vh; }
+    .side-panel { order: -1; }
+    .composer { grid-template-columns: 1fr; }
+    .send-stack { flex-direction: row; }
+    .topbar { height: auto; min-height: 58px; align-items: flex-start; padding: 12px 14px; flex-direction: column; }
+    .layout { padding: 12px; }
+    .bubble { max-width: 94%; }
+  }
+</style>
+</head>
+<body>
+<header class="topbar">
+  <div class="brand">
+    <h1>Brain Console</h1>
+    <span>Agent Eval</span>
+  </div>
+  <div class="top-actions">
+    <a class="link-btn" href="/dashboard/">Dashboard</a>
+    <a class="link-btn" href="/docs" target="_blank" rel="noreferrer">API Docs</a>
+  </div>
+</header>
+
+<main class="layout">
+  <section class="chat-panel">
+    <div class="chat-header">
+      <div class="status-line">
+        <span class="dot" id="status-dot"></span>
+        <span id="status-text">checking</span>
+      </div>
+      <div class="session-pill" id="session-pill"></div>
+    </div>
+    <div class="messages" id="messages">
+      <div class="empty" id="empty-state">暂无对话</div>
+    </div>
+    <form class="composer" id="composer">
+      <textarea id="message" maxlength="4000" placeholder="输入要发给 Brain 的消息"></textarea>
+      <div class="send-stack">
+        <button class="btn btn-primary" type="submit" id="send-btn">发送</button>
+        <button class="btn" type="button" id="clear-btn">清空</button>
+      </div>
+    </form>
+  </section>
+
+  <aside class="side-panel">
+    <div class="field">
+      <label for="session-id">Session ID</label>
+      <input id="session-id" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="user-id">User ID</label>
+      <input id="user-id" value="web-debug" autocomplete="off">
+    </div>
+    <div class="side-row">
+      <button class="btn" type="button" id="new-session-btn">新会话</button>
+      <button class="btn btn-danger" type="button" id="reset-session-btn">重置历史</button>
+    </div>
+    <div class="side-row">
+      <div class="metric">
+        <div class="label">Model</div>
+        <div class="value" id="model-value">-</div>
+      </div>
+      <div class="metric">
+        <div class="label">Active</div>
+        <div class="value" id="active-value">-</div>
+      </div>
+    </div>
+    <div class="side-row">
+      <div class="metric">
+        <div class="label">Scheduler</div>
+        <div class="value" id="scheduler-value">-</div>
+      </div>
+      <div class="metric">
+        <div class="label">Platform</div>
+        <div class="value" id="platform-value">-</div>
+      </div>
+    </div>
+    <div class="metric">
+      <div class="label">Last Latency</div>
+      <div class="value" id="latency-value">-</div>
+    </div>
+  </aside>
+</main>
+
+<div class="toast" id="toast"></div>
+
+<script>
+const $ = (selector) => document.querySelector(selector);
+const state = { sending: false };
+
+function newSessionId() {
+  if (window.crypto?.randomUUID) return `web-${window.crypto.randomUUID().slice(0, 8)}`;
+  return `web-${Math.random().toString(16).slice(2, 10)}`;
+}
+
+function setSession(id) {
+  const sessionId = (id || '').trim() || newSessionId();
+  $('#session-id').value = sessionId;
+  $('#session-pill').textContent = sessionId;
+  localStorage.setItem('web-brain-session-id', sessionId);
+}
+
+function showToast(message, type = 'info') {
+  const toast = $('#toast');
+  toast.textContent = message;
+  toast.className = `toast show${type === 'error' ? ' error' : ''}`;
+  setTimeout(() => toast.classList.remove('show'), 2600);
+}
+
+function setStatus(status, text) {
+  const dot = $('#status-dot');
+  dot.className = `dot ${status}`;
+  $('#status-text').textContent = text;
+}
+
+function ensureMessagesVisible() {
+  $('#empty-state')?.remove();
+}
+
+function appendMessage(role, content, options = {}) {
+  ensureMessagesVisible();
+  const wrap = document.createElement('div');
+  wrap.className = `msg ${role}`;
+  const bubble = document.createElement('div');
+  bubble.className = `bubble${options.loading ? ' loading' : ''}${options.error ? ' error' : ''}`;
+  if (options.html) bubble.innerHTML = sanitizeHtml(content);
+  else bubble.textContent = content;
+  wrap.appendChild(bubble);
+  if (options.meta) {
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = options.meta;
+    bubble.appendChild(meta);
+  }
+  $('#messages').appendChild(wrap);
+  wrap.scrollIntoView({ block: 'end', behavior: 'smooth' });
+  return bubble;
+}
+
+function sanitizeHtml(html) {
+  const template = document.createElement('template');
+  template.innerHTML = html || '';
+  const allowed = new Set(['B', 'I', 'U', 'S', 'CODE', 'PRE', 'BR', 'A']);
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (!allowed.has(node.tagName)) {
+      node.replaceWith(document.createTextNode(node.textContent || ''));
+      continue;
+    }
+    for (const attr of [...node.attributes]) {
+      if (node.tagName !== 'A' || attr.name !== 'href') node.removeAttribute(attr.name);
+    }
+    if (node.tagName === 'A') {
+      const href = node.getAttribute('href') || '';
+      if (!/^https?:\/\//i.test(href)) node.removeAttribute('href');
+      node.setAttribute('target', '_blank');
+      node.setAttribute('rel', 'noreferrer');
+    }
+  }
+  return template.innerHTML;
+}
+
+async function loadStatus() {
+  try {
+    const resp = await fetch('/api/brain/status');
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const data = await resp.json();
+    setStatus('ready', 'ready');
+    $('#model-value').textContent = data.model || '-';
+    $('#active-value').textContent = data.active_conversations ?? '-';
+    const jobCount = data.scheduler_job_count ?? '-';
+    $('#scheduler-value').textContent = data.scheduler_started ? `running · ${jobCount}` : `stopped · ${jobCount}`;
+    $('#platform-value').textContent = data.platform || '-';
+  } catch (error) {
+    setStatus('error', 'unavailable');
+    showToast(`状态检查失败: ${error.message}`, 'error');
+  }
+}
+
+async function sendMessage(event) {
+  event.preventDefault();
+  if (state.sending) return;
+  const input = $('#message');
+  const message = input.value.trim();
+  if (!message) {
+    showToast('message 不能为空', 'error');
+    return;
+  }
+
+  state.sending = true;
+  $('#send-btn').disabled = true;
+  $('#send-btn').textContent = '发送中';
+  setStatus('', 'thinking');
+  appendMessage('user', message);
+  const pending = appendMessage('brain', '处理中...', { loading: true });
+  input.value = '';
+
+  const body = {
+    message,
+    session_id: $('#session-id').value.trim(),
+    user_id: $('#user-id').value.trim() || 'web-debug',
+    username: $('#user-id').value.trim() || 'web-debug',
+  };
+
+  try {
+    const resp = await fetch('/api/brain/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) {
+      throw new Error(data.detail || `HTTP ${resp.status}`);
+    }
+    setSession(data.session_id);
+    pending.className = 'bubble';
+    pending.innerHTML = sanitizeHtml(data.reply_html || '(空响应)');
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = `${data.latency_ms} ms · ${data.message_id}`;
+    pending.appendChild(meta);
+    $('#latency-value').textContent = `${data.latency_ms} ms`;
+    $('#active-value').textContent = data.active_conversations ?? '-';
+    setStatus('ready', 'ready');
+  } catch (error) {
+    pending.className = 'bubble error';
+    pending.textContent = `请求失败: ${error.message}`;
+    setStatus('error', 'error');
+  } finally {
+    state.sending = false;
+    $('#send-btn').disabled = false;
+    $('#send-btn').textContent = '发送';
+    input.focus();
+  }
+}
+
+async function resetSession() {
+  const sessionId = $('#session-id').value.trim();
+  if (!sessionId) return;
+  try {
+    const resp = await fetch(`/api/brain/sessions/${encodeURIComponent(sessionId)}`, { method: 'DELETE' });
+    const data = await resp.json().catch(() => ({}));
+    if (!resp.ok) throw new Error(data.detail || `HTTP ${resp.status}`);
+    $('#active-value').textContent = data.active_conversations ?? '-';
+    showToast('会话历史已重置');
+  } catch (error) {
+    showToast(`重置失败: ${error.message}`, 'error');
+  }
+}
+
+function clearMessages() {
+  $('#messages').innerHTML = '<div class="empty" id="empty-state">暂无对话</div>';
+  $('#latency-value').textContent = '-';
+}
+
+$('#composer').addEventListener('submit', sendMessage);
+$('#clear-btn').addEventListener('click', clearMessages);
+$('#reset-session-btn').addEventListener('click', resetSession);
+$('#new-session-btn').addEventListener('click', () => {
+  setSession(newSessionId());
+  clearMessages();
+});
+$('#session-id').addEventListener('input', (event) => setSession(event.target.value));
+$('#message').addEventListener('keydown', (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === 'Enter') {
+    $('#composer').requestSubmit();
+  }
+});
+
+setSession(localStorage.getItem('web-brain-session-id') || newSessionId());
+loadStatus();
+$('#message').focus();
+</script>
+</body>
+</html>
