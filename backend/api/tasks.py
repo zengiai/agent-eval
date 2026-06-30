@@ -4,13 +4,23 @@ import uuid
 from datetime import datetime, timezone
 from typing import Optional, List
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, func
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.case_set_results.policy import PassPolicy
+from backend.case_set_results.service import CaseSetResultService
 from backend.core.database import get_db
-from backend.core.models import EvalTask, CaseSet, EvalCase, EvalRun, CaseSetMember
+from backend.core.models import (
+    CaseSetEvalResult,
+    EvalTask,
+    CaseSet,
+    EvalCase,
+    EvalRun,
+    CaseSetMember,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -142,6 +152,7 @@ class TriggerEvalRequest(BaseModel):
     agent_version: str
     case_set_name: Optional[str] = None
     layers: Optional[List[str]] = None
+    pass_policy: Optional[PassPolicy] = None
 
 
 class TriggerEvalResponse(BaseModel):
@@ -149,7 +160,9 @@ class TriggerEvalResponse(BaseModel):
     agent_version: str
     case_set_name: str
     total_cases: int
+    total_runs: int
     layers: List[str]
+    pass_policy: dict
 
 
 @router.post("/trigger", response_model=TriggerEvalResponse, status_code=201)
@@ -159,6 +172,7 @@ async def trigger_evaluation(req: TriggerEvalRequest, db: AsyncSession = Depends
     对应 Brain tool: ``trigger_evaluation``
     """
     layers = req.layers or ["intent", "retrieval", "tool", "generation", "outcome"]
+    pass_policy = req.pass_policy or PassPolicy()
 
     # 查找 CaseSet
     case_set = None
@@ -199,20 +213,27 @@ async def trigger_evaluation(req: TriggerEvalRequest, db: AsyncSession = Depends
         case_set_id=case_set.id if case_set else None,
         status="pending",
         total_cases=len(case_ids),
-        config={"layers": layers, "trigger": "manual_im"},
+        config={
+            "layers": layers,
+            "trigger": "manual_im",
+            "pass_policy": pass_policy.to_config(),
+            "total_runs": len(case_ids) * pass_policy.k,
+        },
     )
     db.add(task)
     await db.flush()
 
     # 创建 EvalRuns
     for case_id in case_ids:
-        run = EvalRun(
-            task_id=task.id,
-            eval_case_id=case_id,
-            agent_version=req.agent_version,
-            status="pending",
-        )
-        db.add(run)
+        for attempt_index in range(1, pass_policy.k + 1):
+            run = EvalRun(
+                task_id=task.id,
+                eval_case_id=case_id,
+                agent_version=req.agent_version,
+                attempt_index=attempt_index,
+                status="pending",
+            )
+            db.add(run)
 
     await db.commit()
 
@@ -221,5 +242,87 @@ async def trigger_evaluation(req: TriggerEvalRequest, db: AsyncSession = Depends
         agent_version=req.agent_version,
         case_set_name=req.case_set_name or "默认",
         total_cases=len(case_ids),
+        total_runs=len(case_ids) * pass_policy.k,
         layers=layers,
+        pass_policy=pass_policy.to_config(),
     )
+
+
+def _case_set_result_to_dict(result: CaseSetEvalResult, include_cases: bool = False) -> dict:
+    data = {
+        "id": str(result.id),
+        "task_id": str(result.task_id),
+        "case_set_id": str(result.case_set_id) if result.case_set_id else None,
+        "agent_version": result.agent_version,
+        "formula": result.formula,
+        "k": result.k,
+        "score_threshold": float(result.score_threshold),
+        "power_threshold": float(result.power_threshold),
+        "min_case_pass_rate": float(result.min_case_pass_rate),
+        "status": result.status,
+        "passed": result.passed,
+        "total_cases": result.total_cases,
+        "passed_cases": result.passed_cases,
+        "failed_cases": result.failed_cases,
+        "insufficient_cases": result.insufficient_cases,
+        "case_pass_rate": float(result.case_pass_rate),
+        "attempt_pass_rate": float(result.attempt_pass_rate),
+        "metrics": result.metrics or {},
+        "computed_at": result.computed_at.isoformat() if result.computed_at else None,
+        "error_message": result.error_message,
+    }
+    if include_cases:
+        data["cases"] = [
+            {
+                "id": str(item.id),
+                "eval_case_id": str(item.eval_case_id),
+                "passed": item.passed,
+                "attempt_count": item.attempt_count,
+                "completed_attempts": item.completed_attempts,
+                "passed_attempts": item.passed_attempts,
+                "required_passes": item.required_passes,
+                "best_score": float(item.best_score) if item.best_score is not None else None,
+                "avg_score": float(item.avg_score) if item.avg_score is not None else None,
+                "attempts": item.attempts or [],
+                "failure_reason": item.failure_reason,
+            }
+            for item in result.case_results
+        ]
+    return data
+
+
+@router.get("/{task_id}/result")
+async def get_task_case_set_result(
+    task_id: str,
+    include_cases: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+):
+    """查询评测集 Pass 结果。"""
+    stmt = select(CaseSetEvalResult).where(CaseSetEvalResult.task_id == uuid.UUID(task_id))
+    if include_cases:
+        stmt = stmt.options(selectinload(CaseSetEvalResult.case_results))
+    result = (await db.execute(stmt)).scalar_one_or_none()
+    if not result:
+        raise HTTPException(status_code=404, detail="CaseSet eval result not found")
+    return _case_set_result_to_dict(result, include_cases=include_cases)
+
+
+@router.post("/{task_id}/result/recompute")
+async def recompute_task_case_set_result(
+    task_id: str,
+    include_cases: bool = Query(default=False),
+    db: AsyncSession = Depends(get_db),
+):
+    """手动幂等重算评测集 Pass 结果。"""
+    service = CaseSetResultService(db)
+    try:
+        result = await service.recompute_for_task(uuid.UUID(task_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    await db.commit()
+
+    stmt = select(CaseSetEvalResult).where(CaseSetEvalResult.id == result.id)
+    if include_cases:
+        stmt = stmt.options(selectinload(CaseSetEvalResult.case_results))
+    result = (await db.execute(stmt)).scalar_one()
+    return _case_set_result_to_dict(result, include_cases=include_cases)

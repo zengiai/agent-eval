@@ -158,6 +158,11 @@ class EvalTask(Base):
 
     case_set: Mapped[Optional["CaseSet"]] = relationship(back_populates="tasks")
     runs: Mapped[List["EvalRun"]] = relationship(back_populates="task", cascade="all, delete-orphan")
+    case_set_eval_result: Mapped[Optional["CaseSetEvalResult"]] = relationship(
+        back_populates="task",
+        uselist=False,
+        cascade="all, delete-orphan",
+    )
 
     __table_args__ = (
         Index("idx_eval_tasks_version", "agent_version"),
@@ -176,6 +181,7 @@ class EvalRun(Base):
     task_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), ForeignKey("eval_tasks.id", ondelete="CASCADE"), nullable=False)
     eval_case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)  # 不设 FK，Case 删除后 Run 保留
     agent_version: Mapped[str] = mapped_column(String(100), nullable=False)
+    attempt_index: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
 
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
     trace_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True))  # 不设 FK，回填前为 NULL
@@ -203,9 +209,91 @@ class EvalRun(Base):
 
     __table_args__ = (
         Index("idx_eval_runs_task", "task_id"),
+        Index("idx_eval_runs_task_case_attempt", "task_id", "eval_case_id", "attempt_index"),
         Index("idx_eval_runs_trace", "trace_id"),
         Index("idx_eval_runs_version", "agent_version", "created_at"),
         Index("idx_eval_runs_status", "status"),
+    )
+
+
+# ============================================================
+# case_set_eval_results
+# ============================================================
+class CaseSetEvalResult(Base):
+    __tablename__ = "case_set_eval_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    task_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("eval_tasks.id", ondelete="CASCADE"), nullable=False, unique=True
+    )
+    case_set_id: Mapped[Optional[uuid.UUID]] = mapped_column(UUID(as_uuid=True), ForeignKey("case_sets.id"))
+    agent_version: Mapped[str] = mapped_column(String(100), nullable=False)
+
+    formula: Mapped[str] = mapped_column(String(30), nullable=False)
+    k: Mapped[int] = mapped_column(Integer, nullable=False)
+    score_threshold: Mapped[float] = mapped_column(NUMERIC(5, 2), nullable=False)
+    power_threshold: Mapped[float] = mapped_column(NUMERIC(5, 4), nullable=False)
+    min_case_pass_rate: Mapped[float] = mapped_column(NUMERIC(5, 4), nullable=False)
+
+    status: Mapped[str] = mapped_column(String(20), nullable=False, default="pending")
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+
+    total_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    failed_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    insufficient_cases: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+    case_pass_rate: Mapped[float] = mapped_column(NUMERIC(7, 4), nullable=False, default=0)
+    attempt_pass_rate: Mapped[float] = mapped_column(NUMERIC(7, 4), nullable=False, default=0)
+
+    metrics: Mapped[Optional[dict]] = mapped_column(JSONB, default=dict)
+    computed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, default=datetime.utcnow)
+    error_message: Mapped[Optional[str]] = mapped_column(Text)
+
+    task: Mapped["EvalTask"] = relationship(back_populates="case_set_eval_result")
+    case_results: Mapped[List["CaseSetEvalCaseResult"]] = relationship(
+        back_populates="result",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("idx_case_set_eval_results_task", "task_id"),
+        Index("idx_case_set_eval_results_case_set", "case_set_id"),
+        Index("idx_case_set_eval_results_status", "status"),
+        Index("idx_case_set_eval_results_passed", "passed"),
+    )
+
+
+# ============================================================
+# case_set_eval_case_results
+# ============================================================
+class CaseSetEvalCaseResult(Base):
+    __tablename__ = "case_set_eval_case_results"
+
+    id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=new_uuid)
+    result_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("case_set_eval_results.id", ondelete="CASCADE"), nullable=False
+    )
+    eval_case_id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), nullable=False)
+
+    passed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    completed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    passed_attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    required_passes: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
+
+    best_score: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
+    avg_score: Mapped[Optional[float]] = mapped_column(NUMERIC(5, 2))
+    attempts: Mapped[Optional[list]] = mapped_column(JSONB, default=list)
+    failure_reason: Mapped[Optional[str]] = mapped_column(Text)
+
+    result: Mapped["CaseSetEvalResult"] = relationship(back_populates="case_results")
+
+    __table_args__ = (
+        UniqueConstraint("result_id", "eval_case_id", name="uq_case_set_eval_case_result"),
+        Index("idx_case_set_eval_case_results_result", "result_id"),
+        Index("idx_case_set_eval_case_results_case", "eval_case_id"),
+        Index("idx_case_set_eval_case_results_passed", "passed"),
     )
 
 

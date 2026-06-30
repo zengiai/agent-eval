@@ -80,6 +80,32 @@
   .pagination { display: flex; justify-content: center; align-items: center; gap: 8px; padding: 16px; }
   .pagination span { font-size: 13px; color: var(--text-secondary); }
 
+  /* ═══ CaseSet 工作台 ═══ */
+  .case-set-workbench { display: grid; grid-template-columns: minmax(0, 1.4fr) minmax(320px, .9fr); gap: 16px; align-items: start; }
+  .case-set-form { padding: 16px; border: 1px solid var(--border); border-radius: var(--radius); background: var(--card-bg); }
+  .case-set-form h3 { font-size: 15px; margin-bottom: 12px; }
+  .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .form-field { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+  .form-field.full { grid-column: 1 / -1; }
+  .form-field label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .3px; color: var(--text-secondary); }
+  .form-field input, .form-field textarea, .form-field select { width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: 6px; font-size: 13px; outline: none; resize: vertical; }
+  .form-field input:focus, .form-field textarea:focus, .form-field select:focus { border-color: var(--primary); }
+  .form-field textarea { min-height: 180px; line-height: 1.5; font-family: inherit; }
+  .task-panel { margin-top: 14px; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: #f9fafb; }
+  .task-panel.hidden { display: none; }
+  .task-progress { height: 8px; border-radius: 5px; background: #e5e7eb; overflow: hidden; margin: 8px 0; }
+  .task-progress-fill { height: 100%; background: var(--primary); transition: width .25s; }
+  .task-meta { display: flex; flex-wrap: wrap; gap: 6px 12px; font-size: 12px; color: var(--text-secondary); }
+  .task-results { margin-top: 10px; max-height: 180px; overflow: auto; font-size: 12px; }
+  .task-result-row { display: flex; gap: 8px; padding: 5px 0; border-top: 1px solid var(--border); }
+  .task-result-row:first-child { border-top: none; }
+  .task-result-row .idx { flex: 0 0 28px; color: var(--text-secondary); }
+  .task-result-row .msg { min-width: 0; flex: 1; word-break: break-word; }
+  @media (max-width: 900px) {
+    .case-set-workbench { grid-template-columns: 1fr; }
+    .form-grid { grid-template-columns: 1fr; }
+  }
+
   /* ═══ 侧滑抽屉 ═══ */
   .slide-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.35); z-index: 1000; }
   .slide-overlay.show { display: block; }
@@ -130,17 +156,24 @@
   .distro-seg.outcome { background: #ef4444; }
 
   /* ═══ Span 链路图 ═══ */
-  .span-chain-wrapper { padding: 8px 0 20px; overflow: visible; }
-  .span-chain { display: flex; align-items: flex-start; gap: 0; min-width: max-content; padding: 0 8px; }
-  .span-node { position: relative; display: flex; flex-direction: column; align-items: center; flex-shrink: 0; cursor: pointer; }
-  .span-node-box { width: 100px; padding: 12px 8px; border: 2px solid var(--border); border-radius: 12px; background: var(--card-bg); text-align: center; transition: all .2s; }
-  .span-node-box:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(79,70,229,.15); transform: translateY(-2px); }
-  .span-node-box .node-seq { font-size: 10px; font-weight: 600; color: var(--text-secondary); margin-bottom: 2px; }
-  .span-node-box .node-icon { font-size: 18px; line-height: 1; margin-bottom: 2px; }
-  .span-node-box .node-type { font-size: 11px; font-weight: 700; color: var(--text); }
-  .span-node-box .node-time { font-size: 10px; color: var(--text-secondary); margin-top: 2px; }
-  .span-arrow { display: flex; align-items: center; flex-shrink: 0; padding: 0 2px; margin-top: 38px; }
-  .span-arrow svg { width: 28px; height: 16px; }
+  .span-chain-wrapper { padding: 8px 0 20px; overflow: visible; max-width: 100%; }
+  .span-chain { display: flex; flex-direction: column; align-items: stretch; gap: 6px; width: min(178px, 100%); box-sizing: border-box; padding: 0 8px; }
+  .span-node { position: relative; display: flex; flex-direction: column; align-items: stretch; flex-shrink: 0; cursor: pointer; min-width: 0; }
+  .span-node-box { width: 100%; box-sizing: border-box; padding: 10px; border: 2px solid var(--border); border-radius: 8px; background: var(--card-bg); transition: all .2s; display: grid; grid-template-columns: 26px minmax(0,1fr); align-items: center; gap: 8px; }
+  .span-node-box.has-controls { grid-template-columns: 26px minmax(0,1fr); }
+  .span-node-box:hover { border-color: var(--primary); box-shadow: 0 4px 12px rgba(79,70,229,.15); transform: translateX(2px); }
+  .span-node-box .node-main { min-width: 0; }
+  .span-node-box .node-head { display: flex; align-items: center; gap: 5px; min-width: 0; }
+  .span-node-box .node-seq { flex: 0 0 auto; font-size: 10px; font-weight: 600; color: var(--text-secondary); }
+  .span-node-box .node-icon { font-size: 18px; line-height: 1; text-align: center; }
+  .span-node-box .node-type { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; color: var(--text); }
+  .span-node-box .node-time { font-size: 10px; color: var(--text-secondary); margin-top: 3px; }
+  .span-node-controls { grid-column: 1 / -1; min-width: 0; }
+  .span-layer-select { display: block; width: 100%; max-width: 100%; box-sizing: border-box; margin-top: 2px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; background: #fff; color: var(--text); font-size: 11px; }
+  .span-edit-hint { margin: 0 0 10px; padding: 8px 10px; border-radius: 6px; background: #f0fdf4; color: #166534; font-size: 12px; border: 1px solid #bbf7d0; }
+  .span-edit-hint.blocked { background: #f9fafb; color: var(--text-secondary); border-color: var(--border); }
+  .span-arrow { display: flex; align-items: center; justify-content: flex-start; flex-shrink: 0; height: 18px; padding-left: 13px; }
+  .span-arrow svg { width: 16px; height: 18px; }
   .span-arrow line { stroke: #cbd5e1; stroke-width: 2; }
   .span-arrow polyline { fill: none; stroke: #cbd5e1; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
 
@@ -197,6 +230,7 @@
   <div class="tabs">
     <button class="tab-btn active" data-tab="traces">🔍 Traces</button>
     <button class="tab-btn" data-tab="cases">📋 Cases</button>
+    <button class="tab-btn" data-tab="case-sets">🗂️ CaseSets</button>
     <a class="tab-link" href="/dashboard/brain.html">🧠 Brain</a>
   </div>
 
@@ -257,6 +291,66 @@
     </div>
     <div class="pagination" id="case-pagination"></div>
   </div>
+
+  <!-- CaseSets 面板 -->
+  <div id="panel-case-sets" style="display:none;">
+    <div class="toolbar">
+      <input type="text" id="case-set-search" placeholder="搜索 CaseSet...">
+      <input type="text" id="case-set-category" placeholder="分类">
+      <button class="btn btn-primary" id="btn-search-case-sets">搜索</button>
+      <button class="btn btn-outline" id="btn-refresh-case-sets">刷新</button>
+    </div>
+    <div class="case-set-workbench">
+      <div class="card">
+        <table>
+          <thead><tr><th>名称</th><th>分类</th><th>版本</th><th>Case 数</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody id="case-set-tbody"><tr><td colspan="6" class="empty-state"><div class="icon">🗂️</div>暂无测试集</td></tr></tbody>
+        </table>
+      </div>
+      <div class="case-set-form">
+        <h3>批量生成 CaseSet</h3>
+        <div class="form-grid">
+          <div class="form-field full">
+            <label for="batch-case-set-id">归属 CaseSet</label>
+            <select id="batch-case-set-id"><option value="">新建测试集</option></select>
+          </div>
+          <div class="form-field">
+            <label for="batch-case-set-name">名称</label>
+            <input id="batch-case-set-name" placeholder="Regression Set">
+          </div>
+          <div class="form-field">
+            <label for="batch-agent-version">Agent 版本</label>
+            <input id="batch-agent-version" placeholder="0.0.0">
+          </div>
+          <div class="form-field">
+            <label for="batch-category">分类</label>
+            <input id="batch-category" placeholder="smoke">
+          </div>
+          <div class="form-field">
+            <label for="batch-concurrency">并发</label>
+            <select id="batch-concurrency">
+              <option value="1">1</option>
+              <option value="3" selected>3</option>
+              <option value="5">5</option>
+              <option value="10">10</option>
+            </select>
+          </div>
+          <div class="form-field full">
+            <label for="batch-description">描述</label>
+            <input id="batch-description" placeholder="本轮测试目标">
+          </div>
+          <div class="form-field full">
+            <label for="batch-questions">Questions</label>
+            <textarea id="batch-questions" placeholder="每行一个 question"></textarea>
+          </div>
+          <div class="form-field full">
+            <button class="btn btn-success" id="btn-submit-case-set-batch">开始生成</button>
+          </div>
+        </div>
+        <div class="task-panel hidden" id="case-set-task-panel"></div>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Toast -->
@@ -291,6 +385,7 @@ function showToast(msg, type='success') {
 }
 
 function formatDate(d) { return new Date(d).toLocaleString('zh-CN'); }
+function formatDateSafe(d) { return d ? formatDate(d) : '-'; }
 function scoreClass(s) { return s >= 80 ? 'score-high' : s >= 50 ? 'score-mid' : 'score-low'; }
 function sourceBadge(s) {
   const map = { eval:'badge-eval', production:'badge-production' };
@@ -432,8 +527,10 @@ $$('.tab-btn').forEach(btn => btn.addEventListener('click', function() {
   const tab = this.dataset.tab;
   $('#panel-traces').style.display = tab === 'traces' ? '' : 'none';
   $('#panel-cases').style.display = tab === 'cases' ? '' : 'none';
+  $('#panel-case-sets').style.display = tab === 'case-sets' ? '' : 'none';
   if (tab === 'traces') loadTraces();
-  else loadCases();
+  else if (tab === 'cases') loadCases();
+  else if (tab === 'case-sets') loadCaseSets();
 }));
 
 // ═══ Traces ═══
@@ -468,7 +565,7 @@ function renderTraces(data) {
     return;
   }
   tbody.innerHTML = data.items.map(t => `
-    <tr class="clickable" onclick="viewTraceDetail('${t.id}')">
+    <tr class="clickable" onclick="viewTraceDetail('${t.id}', ${t.case_id ? `'${t.case_id}'` : 'null'})">
       <td class="query" title="${escapeHtml(t.query)}">${escapeHtml(t.query)}</td>
       <td>${sourceBadge(t.source)}</td>
       <td>${statusBadge(t.status)}</td>
@@ -477,7 +574,7 @@ function renderTraces(data) {
       <td style="font-size:12px;color:var(--text-secondary);">${formatDate(t.created_at)}</td>
       <td>
         ${t.already_case
-          ? `<span class="badge badge-trace" style="margin-right:4px;">📋 已转Case</span><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();viewTraceDetail('${t.id}')">查看</button>`
+          ? `<span class="badge badge-trace" style="margin-right:4px;">📋 已转Case</span><button class="btn btn-outline btn-sm" onclick="event.stopPropagation();viewTraceDetail('${t.id}', '${t.case_id}')">查看</button>`
           : `<button class="btn btn-primary btn-sm" onclick="event.stopPropagation();convertTraceToCase('${t.id}')">→ Case</button>`}
       </td>
     </tr>
@@ -517,7 +614,42 @@ function latencyColor(ms) {
   return 'var(--danger)';
 }
 
-async function viewTraceDetail(traceId) {
+const SPAN_LAYER_OPTIONS = [
+  { value: 'intent', label: '意图' },
+  { value: 'retrieval', label: '检索' },
+  { value: 'tool_call', label: '工具' },
+  { value: 'generation', label: '生成' },
+];
+
+function spanLayerOptions(current) {
+  return SPAN_LAYER_OPTIONS.map(opt =>
+    `<option value="${opt.value}" ${opt.value === current ? 'selected' : ''}>${opt.label}</option>`
+  ).join('');
+}
+
+async function updateCaseSpanLayer(caseId, spanId, spanType, traceId, selectEl) {
+  if (!caseId) {
+    showToast('该 Trace 未绑定 Case，无法修改 Span 层归属', 'error');
+    return;
+  }
+  selectEl.disabled = true;
+  try {
+    const res = await fetch(`${API_BASE}/cases/${caseId}/spans/${spanId}/layer`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ span_type: spanType }),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '修改失败');
+    showToast('Span 层归属已更新', 'success');
+    await viewTraceDetail(traceId, caseId);
+  } catch(e) {
+    showToast('❌ ' + e.message, 'error');
+    selectEl.disabled = false;
+  }
+}
+
+async function viewTraceDetail(traceId, caseId = null) {
   openSlidePanel('Trace 详情', '<div style="text-align:center;padding:40px;"><span class="spinner"></span> 加载中…</div>');
   try {
     const res = await fetch(`${API_BASE}/cases/traces/${traceId}`);
@@ -526,6 +658,10 @@ async function viewTraceDetail(traceId) {
     const t = data.trace;
     const spans = data.spans || [];
     const scores = data.eval_scores || [];
+    const caseBinding = data.case_binding || {};
+    const editCaseId = caseId || caseBinding.case_id || null;
+    const canEditSpanLayer = Boolean(editCaseId && caseBinding.span_layer_editable);
+    const editBlockReason = caseBinding.span_layer_edit_block_reason || '';
 
     // ── 概览 HTML：统计卡片布局 ──
     const oscore = t.overall_score;
@@ -644,20 +780,30 @@ async function viewTraceDetail(traceId) {
       _popoverStore.set(sp.id, popoverHtml);
 
       const latencyStr = sp.latency_ms != null ? fmtLatency(sp.latency_ms) : '';
+      const layerEditor = canEditSpanLayer
+        ? `<div class="span-node-controls"><select class="span-layer-select" onclick="event.stopPropagation();" onchange="event.stopPropagation();updateCaseSpanLayer('${editCaseId}', '${sp.id}', this.value, '${traceId}', this)">${spanLayerOptions(sp.span_type)}</select></div>`
+        : '';
       return '<div class="span-node" data-span-id="' + sp.id + '">'
-        + '<div class="span-node-box">'
-        + '<div class="node-seq">#' + sp.sequence + '</div>'
+        + '<div class="span-node-box' + (layerEditor ? ' has-controls' : '') + '">'
         + '<div class="node-icon">' + icon + '</div>'
-        + '<div class="node-type">' + lname + '</div>'
+        + '<div class="node-main">'
+        + '<div class="node-head"><span class="node-seq">#' + sp.sequence + '</span><span class="node-type" title="' + escapeHtml(lname) + '">' + lname + '</span></div>'
         + (latencyStr ? '<div class="node-time" style="color:' + latencyColor(sp.latency_ms) + ';">' + latencyStr + '</div>' : '')
+        + '</div>'
+        + layerEditor
         + '</div>'
         + '</div>';
     };
 
-    const buildArrow = () => '<div class="span-arrow"><svg viewBox="0 0 28 16"><line x1="0" y1="8" x2="20" y2="8"/><polyline points="14,3 22,8 14,13"/></svg></div>';
+    const buildArrow = () => '<div class="span-arrow"><svg viewBox="0 0 16 24"><line x1="8" y1="0" x2="8" y2="16"/><polyline points="3,11 8,18 13,11"/></svg></div>';
 
+    const spanEditHint = editCaseId
+      ? (canEditSpanLayer
+        ? '<div class="span-edit-hint">当前 Case 尚无评分，可修改 Span 层归属。评分后将锁定此操作。</div>'
+        : '<div class="span-edit-hint blocked">Span 层归属已锁定：' + escapeHtml(editBlockReason || '当前状态不可编辑') + '</div>')
+      : '';
     const spansHtml = spans.length
-      ? '<div class="span-chain-wrapper"><div class="span-chain">'
+      ? spanEditHint + '<div class="span-chain-wrapper"><div class="span-chain">'
         + spans.map((sp, i) => buildSpanNode(sp, i) + (i < spans.length - 1 ? buildArrow() : '')).join('')
         + '</div></div>'
       : '<div class="empty-state"><div class="icon">📄</div>暂无 Span 数据</div>';
@@ -836,19 +982,12 @@ function renderCases(data) {
       <td>${caseSourceBadge(c.source)}</td>
       <td>${c.difficulty}</td>
       <td>${c.category || '-'}</td>
-      <td data-field="score"><span class="${scoreClass(c.last_avg_score||0)}">${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</span></td>
+      <td data-field="score">${caseScoreHtml(c)}</td>
       <td data-field="run_count">${c.run_count}</td>
       <td data-field="run_status">${runStatusBadge}</td>
       <td><span class="badge ${c.is_active?'badge-success':'badge-error'}">${c.health_status}</span></td>
       <td style="display:flex;gap:6px;" data-field="actions">
-        ${c.source_trace_id
-          ? `<button class="btn btn-outline btn-sm" onclick="viewTraceDetail('${c.source_trace_id}')">详情</button>`
-          : `<button class="btn btn-outline btn-sm" onclick="viewCaseDetail('${c.id}')">详情</button>`}
-        ${c.source_trace_id
-          ? (c.latest_run_status === 'running'
-              ? `<button class="btn btn-outline btn-sm" disabled><span class="spinner"></span> 评测中</button>`
-              : `<button class="btn btn-success btn-sm" onclick="evaluateCase('${c.id}')">▶ 评分</button>`)
-          : '<button class="btn btn-outline btn-sm" disabled title="该 Case 无关联 Trace">无Trace</button>'}
+        ${caseActionsHtml(c)}
       </td>
     </tr>`;
   }).join('');
@@ -874,13 +1013,30 @@ function runStatusBadgeHtml(status) {
   return '<span style="color:var(--text-secondary);">-</span>';
 }
 
+function caseScoreHtml(c) {
+  const score = c.last_avg_score;
+  return `<span class="${scoreClass(score ?? 0)}">${score != null ? score.toFixed(1) : '-'}</span>`;
+}
+
+function caseActionsHtml(c) {
+  const detailBtn = c.source_trace_id
+    ? `<button class="btn btn-outline btn-sm" data-action="detail" onclick="viewTraceDetail('${c.source_trace_id}', '${c.id}')">详情</button>`
+    : `<button class="btn btn-outline btn-sm" data-action="detail" onclick="viewCaseDetail('${c.id}')">详情</button>`;
+  const evalBtn = c.source_trace_id
+    ? (c.latest_run_status === 'running'
+        ? '<button class="btn btn-outline btn-sm" data-action="evaluate" disabled><span class="spinner"></span> 评测中</button>'
+        : `<button class="btn btn-success btn-sm" data-action="evaluate" onclick="evaluateCase('${c.id}', event)">▶ 评分</button>`)
+    : '<button class="btn btn-outline btn-sm" data-action="evaluate" disabled title="该 Case 无关联 Trace">无Trace</button>';
+  return detailBtn + evalBtn;
+}
+
 async function viewCaseDetail(caseId) {
   try {
     const res = await fetch(`${API_BASE}/cases/${caseId}`);
     const c = await res.json();
     const metadata = c.metadata ? JSON.stringify(c.metadata, null, 2) : '{}';
     const traceLink = c.source_trace_id
-      ? `<button class="btn btn-outline btn-sm" onclick="closeSlidePanel();setTimeout(()=>viewTraceDetail('${c.source_trace_id}'),350);">🔍 查看原始 Trace</button>`
+      ? `<button class="btn btn-outline btn-sm" onclick="closeSlidePanel();setTimeout(()=>viewTraceDetail('${c.source_trace_id}', '${c.id}'),350);">🔍 查看原始 Trace</button>`
       : '';
     openSlidePanel(`Case 详情: ${escapeHtml(c.query.substring(0, 50))}`, `
       <p><strong>ID:</strong> <code>${c.id}</code></p>
@@ -896,13 +1052,24 @@ async function viewCaseDetail(caseId) {
   } catch(e) { showToast('加载详情失败', 'error'); }
 }
 
-async function evaluateCase(caseId) {
-  const btn = event.target;
+async function evaluateCase(caseId, ev = null) {
+  const answer = prompt('可选填写期望 Answer / 参考答案；留空则由 LLM 自动生成。');
+  if (answer === null) return;
+
+  const btn = ev?.currentTarget || ev?.target?.closest?.('button') || window.event?.target?.closest?.('button');
+  if (!btn) return;
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span> 评测中';
 
   try {
-    const res = await fetch(`${API_BASE}/cases/${caseId}/evaluate`, { method: 'POST' });
+    const payload = {};
+    const trimmedAnswer = answer.trim();
+    if (trimmedAnswer) payload.gold_answer = trimmedAnswer;
+    const res = await fetch(`${API_BASE}/cases/${caseId}/evaluate`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
     const data = await res.json();
     if (data.error) { showToast('❌ ' + data.error, 'error'); btn.disabled = false; btn.textContent = '▶ 评分'; return; }
 
@@ -915,18 +1082,6 @@ async function evaluateCase(caseId) {
       row.dataset.runStatus = 'running';
       const statusCell = row.querySelector('td[data-field="run_status"]');
       if (statusCell) statusCell.innerHTML = runStatusBadgeHtml('running');
-      // 更新按钮为 disabled 状态
-      const actionsCell = row.querySelector('td[data-field="actions"]');
-      if (actionsCell) {
-        const evalBtn = actionsCell.querySelector('.btn-success, .btn-outline');
-        if (evalBtn && evalBtn.textContent.includes('评测中')) {
-          // 已经是评测中状态
-        } else if (evalBtn) {
-          evalBtn.disabled = true;
-          evalBtn.className = 'btn btn-outline btn-sm';
-          evalBtn.innerHTML = '<span class="spinner"></span> 评测中';
-        }
-      }
     }
 
     // 启动轮询
@@ -985,12 +1140,7 @@ async function pollCasesDiff() {
       const oldStatus = row.dataset.runStatus || '';
       const newStatus = c.latest_run_status || '';
 
-      if (oldStatus === newStatus) {
-        if (newStatus === 'running') hasRunning = true;
-        continue;
-      }
-
-      // 状态发生变化 → 定向更新该行
+      // 每次轮询都按接口结果重绘可变列，避免按钮/分数与真实状态脱节。
       row.dataset.runStatus = newStatus;
 
       // 更新"评测"列 badge
@@ -998,10 +1148,8 @@ async function pollCasesDiff() {
       if (statusCell) statusCell.innerHTML = runStatusBadgeHtml(newStatus);
 
       // 更新"最近均分"列
-      if (c.last_avg_score != null) {
-        const scoreCell = row.querySelector('td[data-field="score"]');
-        if (scoreCell) scoreCell.innerHTML = `<span class="${scoreClass(c.last_avg_score)}">${c.last_avg_score.toFixed(1)}</span>`;
-      }
+      const scoreCell = row.querySelector('td[data-field="score"]');
+      if (scoreCell) scoreCell.innerHTML = caseScoreHtml(c);
 
       // 更新"执行次数"列
       const runCountCell = row.querySelector('td[data-field="run_count"]');
@@ -1009,21 +1157,14 @@ async function pollCasesDiff() {
 
       // 更新操作列按钮
       const actionsCell = row.querySelector('td[data-field="actions"]');
-      if (actionsCell && newStatus !== 'running') {
-        const evalBtn = actionsCell.querySelector('button[disabled]');
-        if (evalBtn && evalBtn.textContent.includes('评测中')) {
-          evalBtn.disabled = false;
-          evalBtn.className = 'btn btn-success btn-sm';
-          evalBtn.textContent = '▶ 评分';
-        }
-      }
+      if (actionsCell) actionsCell.innerHTML = caseActionsHtml(c);
 
-      if (newStatus === 'completed') {
-        showToast('Case 评测完成', 'success');
-      } else if (newStatus === 'failed') {
-        showToast('Case 评测失败', 'error');
-      } else if (newStatus === 'running') {
+      if (newStatus === 'running') {
         hasRunning = true;
+      } else if (oldStatus === 'running' && newStatus === 'completed') {
+        showToast('Case 评测完成', 'success');
+      } else if (oldStatus === 'running' && newStatus === 'failed') {
+        showToast('Case 评测失败', 'error');
       }
     }
 
@@ -1213,6 +1354,243 @@ async function viewCaseScores(caseId) {
   } catch(e) { showToast('加载评分历史失败', 'error'); }
 }
 
+// ═══ CaseSets ═══
+let _activeCaseSetBatchTaskId = null;
+let _caseSetBatchPollTimer = null;
+let _caseSetCache = [];
+
+async function loadCaseSets() {
+  const params = new URLSearchParams();
+  const search = $('#case-set-search').value;
+  if (search) params.set('search', search);
+  const category = $('#case-set-category').value;
+  if (category) params.set('category', category);
+
+  try {
+    const res = await fetch(`${API_BASE}/case-sets?${params}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '加载失败');
+    renderCaseSets(data);
+  } catch(e) {
+    showToast('加载 CaseSet 列表失败: ' + e.message, 'error');
+  }
+}
+
+function renderCaseSets(data) {
+  const items = data.case_sets || [];
+  _caseSetCache = items;
+  const tbody = $('#case-set-tbody');
+  if (!items.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="empty-state"><div class="icon">🗂️</div>暂无测试集</td></tr>';
+  } else {
+    tbody.innerHTML = items.map(cs => `
+      <tr>
+        <td class="query" title="${escapeHtml(cs.name)}">${escapeHtml(cs.name)}</td>
+        <td>${escapeHtml(cs.category || '-')}</td>
+        <td>${escapeHtml(cs.version || '-')}</td>
+        <td><b>${cs.case_count || 0}</b></td>
+        <td style="font-size:12px;color:var(--text-secondary);">${formatDateSafe(cs.created_at)}</td>
+        <td style="display:flex;gap:6px;">
+          <button class="btn btn-outline btn-sm" onclick="viewCaseSetDetail('${cs.full_id || cs.id}')">详情</button>
+          <button class="btn btn-outline btn-sm" onclick="selectCaseSetForBatch('${cs.full_id || cs.id}')">选择</button>
+        </td>
+      </tr>
+    `).join('');
+  }
+
+  const select = $('#batch-case-set-id');
+  const previous = select.value;
+  select.innerHTML = '<option value="">新建测试集</option>' + items.map(cs =>
+    `<option value="${cs.full_id || cs.id}">${escapeHtml(cs.name)} (${cs.case_count || 0})</option>`
+  ).join('');
+  if (previous && items.some(cs => (cs.full_id || cs.id) === previous)) select.value = previous;
+}
+
+function selectCaseSetForBatch(caseSetId) {
+  $('#batch-case-set-id').value = caseSetId;
+  const found = _caseSetCache.find(cs => (cs.full_id || cs.id) === caseSetId);
+  $('#batch-case-set-name').value = found?.name || '';
+}
+
+async function submitCaseSetBatch() {
+  const btn = $('#btn-submit-case-set-batch');
+  const caseSetId = $('#batch-case-set-id').value;
+  const name = $('#batch-case-set-name').value.trim();
+  const questionsText = $('#batch-questions').value.trim();
+  if (!caseSetId && !name) {
+    showToast('请填写 CaseSet 名称或选择已有测试集', 'error');
+    return;
+  }
+  if (!questionsText) {
+    showToast('请至少输入一条 question', 'error');
+    return;
+  }
+
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> 提交中';
+  try {
+    const payload = {
+      case_set_id: caseSetId || null,
+      name: name || null,
+      description: $('#batch-description').value.trim() || null,
+      category: $('#batch-category').value.trim() || null,
+      agent_version: $('#batch-agent-version').value.trim() || null,
+      concurrency: Number($('#batch-concurrency').value || 3),
+      questions_text: questionsText,
+    };
+    const res = await fetch(`${API_BASE}/case-sets/batch-from-questions`, {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(payload),
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '提交失败');
+
+    _activeCaseSetBatchTaskId = data.task_id;
+    renderCaseSetBatchTask({
+      task_id: data.task_id,
+      status: data.status,
+      total_cases: data.total_questions,
+      completed_cases: 0,
+      failed_cases: 0,
+      processed_cases: 0,
+      progress: 0,
+      summary_metrics: {},
+    });
+    showToast('批量任务已提交', 'success');
+    startCaseSetBatchPolling(data.task_id);
+    loadCaseSets();
+  } catch(e) {
+    showToast('❌ ' + e.message, 'error');
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '开始生成';
+  }
+}
+
+function startCaseSetBatchPolling(taskId) {
+  if (_caseSetBatchPollTimer) clearInterval(_caseSetBatchPollTimer);
+  _caseSetBatchPollTimer = setInterval(() => pollCaseSetBatchTask(taskId), 3000);
+  pollCaseSetBatchTask(taskId);
+}
+
+function stopCaseSetBatchPolling() {
+  if (_caseSetBatchPollTimer) {
+    clearInterval(_caseSetBatchPollTimer);
+    _caseSetBatchPollTimer = null;
+  }
+}
+
+async function pollCaseSetBatchTask(taskId) {
+  try {
+    const res = await fetch(`${API_BASE}/case-sets/batch-tasks/${taskId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '任务查询失败');
+    renderCaseSetBatchTask(data);
+    if (data.status === 'completed' || data.status === 'failed') {
+      stopCaseSetBatchPolling();
+      loadCaseSets();
+    }
+  } catch(e) {
+    stopCaseSetBatchPolling();
+    showToast('批量任务轮询失败: ' + e.message, 'error');
+  }
+}
+
+function batchStatusBadgeHtml(status) {
+  if (status === 'running') return '<span class="badge badge-running"><span class="spinner" style="width:10px;height:10px;border-width:1.5px;vertical-align:middle;margin-right:3px;"></span>运行中</span>';
+  if (status === 'completed') return '<span class="badge badge-completed">✓ 完成</span>';
+  if (status === 'failed') return '<span class="badge badge-failed">✗ 失败</span>';
+  return `<span class="badge">${escapeHtml(status || '-')}</span>`;
+}
+
+function renderCaseSetBatchTask(task) {
+  const panel = $('#case-set-task-panel');
+  panel.classList.remove('hidden');
+  const metrics = task.summary_metrics || {};
+  const itemResults = metrics.item_results || [];
+  const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+  const rows = itemResults.slice(-8).map(item => {
+    const ok = item.status === 'completed';
+    const label = ok ? `Case ${escapeHtml(item.case_id || '-')}` : escapeHtml(item.error || '失败');
+    return `<div class="task-result-row">
+      <div class="idx">#${item.index || '-'}</div>
+      <div class="msg"><span class="badge ${ok ? 'badge-success' : 'badge-error'}">${ok ? '完成' : '失败'}</span> ${escapeHtml(item.question || '')}<br><span style="color:var(--text-secondary);">${label}</span></div>
+    </div>`;
+  }).join('');
+
+  panel.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+      <strong>批量任务</strong>
+      ${batchStatusBadgeHtml(task.status)}
+    </div>
+    <div class="task-progress"><div class="task-progress-fill" style="width:${progress}%;"></div></div>
+    <div class="task-meta">
+      <span>任务: <code>${escapeHtml((task.task_id || '').slice(0, 8))}</code></span>
+      <span>进度: <b>${task.processed_cases || 0}/${task.total_cases || 0}</b></span>
+      <span>成功: <b style="color:var(--success);">${task.completed_cases || 0}</b></span>
+      <span>失败: <b style="color:var(--danger);">${task.failed_cases || 0}</b></span>
+    </div>
+    ${rows ? `<div class="task-results">${rows}</div>` : ''}
+  `;
+}
+
+async function viewCaseSetDetail(caseSetId) {
+  try {
+    const res = await fetch(`${API_BASE}/case-sets/${caseSetId}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || '加载失败');
+    const cs = data.case_set;
+    const latest = data.latest_batch_task ? renderCaseSetTaskSummary(data.latest_batch_task) : '<p style="color:var(--text-secondary);">暂无批量任务</p>';
+    const cases = data.cases || [];
+    const casesHtml = cases.length ? `
+      <table>
+        <thead><tr><th>Query</th><th>分数</th><th>次数</th><th>操作</th></tr></thead>
+        <tbody>
+          ${cases.map(c => `
+            <tr>
+              <td class="query" title="${escapeHtml(c.query)}">${escapeHtml(c.query)}</td>
+              <td>${c.last_avg_score != null ? c.last_avg_score.toFixed(1) : '-'}</td>
+              <td>${c.run_count || 0}</td>
+              <td>${c.source_trace_id ? `<button class="btn btn-outline btn-sm" onclick="viewTraceDetail('${c.source_trace_id}', '${c.id}')">Trace</button>` : `<button class="btn btn-outline btn-sm" onclick="viewCaseDetail('${c.id}')">Case</button>`}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>
+    ` : '<div class="empty-state"><div class="icon">📋</div>暂无 Case</div>';
+
+    openSlidePanel(`CaseSet: ${escapeHtml(cs.name)}`, `
+      <p><strong>ID:</strong> <code>${escapeHtml(cs.full_id)}</code></p>
+      <p><strong>分类:</strong> ${escapeHtml(cs.category || '-')} | <strong>版本:</strong> ${escapeHtml(cs.version || '-')} | <strong>Case:</strong> ${cs.case_count || 0}</p>
+      <p><strong>描述:</strong> ${escapeHtml(cs.description || '-')}</p>
+      <hr>
+      ${latest}
+      <hr>
+      ${casesHtml}
+    `);
+  } catch(e) {
+    showToast('加载 CaseSet 详情失败: ' + e.message, 'error');
+  }
+}
+
+function renderCaseSetTaskSummary(task) {
+  const progress = Math.max(0, Math.min(100, Number(task.progress || 0)));
+  return `
+    <div class="task-panel">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <strong>最近批量任务</strong>
+        ${batchStatusBadgeHtml(task.status)}
+      </div>
+      <div class="task-progress"><div class="task-progress-fill" style="width:${progress}%;"></div></div>
+      <div class="task-meta">
+        <span>进度: <b>${task.processed_cases || 0}/${task.total_cases || 0}</b></span>
+        <span>成功: <b style="color:var(--success);">${task.completed_cases || 0}</b></span>
+        <span>失败: <b style="color:var(--danger);">${task.failed_cases || 0}</b></span>
+      </div>
+    </div>
+  `;
+}
+
 async function loadCaseStats() {
   try {
     const res = await fetch(`${API_BASE}/cases?limit=1`);
@@ -1279,32 +1657,38 @@ document.addEventListener('mouseover', function(e) {
   // 从全局 Map 读取 popover 内容（by span.id，避免属性编码截断）
   const spanId = node.dataset.spanId;
   const popoverHtml = spanId ? _popoverStore.get(spanId) : null;
-  if (!popoverHtml) return;
+  if (!popoverHtml) { hidePopover(); return; }
 
   // 填充全局 popover
   _popGlobal.innerHTML = popoverHtml;
-  _popGlobal.style.maxHeight = '420px';
-  _popGlobal.style.width = '340px';
+  const popW = Math.min(340, Math.max(260, window.innerWidth - 16));
+  const maxPopH = Math.min(420, window.innerHeight - 16);
+  _popGlobal.style.maxHeight = maxPopH + 'px';
+  _popGlobal.style.width = popW + 'px';
+  _popGlobal.style.visibility = 'hidden';
+  _popGlobal.style.display = 'block';
 
   // 定位
   const box = node.querySelector('.span-node-box');
-  if (!box) return;
+  if (!box) { hidePopover(); return; }
   const boxRect = box.getBoundingClientRect();
-  const popW = 340, popH = Math.min(420, _popGlobal.scrollHeight || 400);
-  let left = boxRect.left + boxRect.width / 2 - popW / 2;
-  let top = boxRect.bottom + 8;
+  const popH = Math.min(maxPopH, _popGlobal.scrollHeight || maxPopH);
+  let left = boxRect.right + 12;
+  let top = boxRect.top;
 
-  // 边界修正：优先显示在下方，空间不够则翻到上方
-  if (top + popH > window.innerHeight - 8) {
-    top = boxRect.top - popH - 8;
-    if (top < 8) top = 8;
+  // 边界修正：优先显示在节点右侧，右侧不足时再回退到左侧或视口内。
+  if (left + popW > window.innerWidth - 8) {
+    const fallbackLeft = boxRect.left - popW - 12;
+    left = fallbackLeft >= 8 ? fallbackLeft : window.innerWidth - popW - 8;
   }
+  if (top + popH > window.innerHeight - 8) top = window.innerHeight - popH - 8;
+  if (top < 8) top = 8;
   if (left < 8) left = 8;
   if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
 
   _popGlobal.style.left = left + 'px';
   _popGlobal.style.top = top + 'px';
-  _popGlobal.style.display = 'block';
+  _popGlobal.style.visibility = 'visible';
   _activeNode = node;
 }, true);
 
@@ -1326,8 +1710,16 @@ function hidePopover() {
 // ═══ 事件绑定 ═══
 $('#btn-search-traces').addEventListener('click', () => loadTraces(0));
 $('#btn-search-cases').addEventListener('click', () => loadCases(0));
+$('#btn-search-case-sets').addEventListener('click', () => loadCaseSets());
+$('#btn-refresh-case-sets').addEventListener('click', () => loadCaseSets());
+$('#btn-submit-case-set-batch').addEventListener('click', () => submitCaseSetBatch());
+$('#batch-case-set-id').addEventListener('change', function() {
+  if (!this.value) return;
+  selectCaseSetForBatch(this.value);
+});
 $('#trace-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadTraces(0); });
 $('#case-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadCases(0); });
+$('#case-set-search').addEventListener('keydown', e => { if (e.key === 'Enter') loadCaseSets(); });
 
 // ═══ 初始加载 ═══
 loadTraces();

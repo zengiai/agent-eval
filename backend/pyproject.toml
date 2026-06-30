@@ -3,6 +3,7 @@ name = "agent-eval-backend"
 version = "0.1.0"
 description = "Agent 调用链路自动评测系统 - 后端"
 requires-python = ">=3.11"
+license = { text = "MIT" }
 dependencies = [
     "fastapi>=0.115.0",
     "uvicorn[standard]>=0.30.0",

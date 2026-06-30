@@ -124,6 +124,7 @@ class EvalAPIClient:
         agent_version: str,
         case_set_name: Optional[str] = None,
         layers: Optional[List[str]] = None,
+        pass_policy: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """触发评测 → POST /api/tasks/trigger"""
         body: Dict[str, Any] = {"agent_version": agent_version}
@@ -131,6 +132,8 @@ class EvalAPIClient:
             body["case_set_name"] = case_set_name
         if layers:
             body["layers"] = layers
+        if pass_policy:
+            body["pass_policy"] = pass_policy
         return await self._post("/api/tasks/trigger", json=body)
 
     async def sample_and_evaluate(

@@ -20,6 +20,7 @@ class RunResponse(BaseModel):
     task_id: str
     eval_case_id: str
     agent_version: str
+    attempt_index: int
     status: str
     trace_id: Optional[str]
     error_message: Optional[str]
@@ -59,6 +60,7 @@ async def list_runs(
             task_id=str(r.task_id),
             eval_case_id=str(r.eval_case_id),
             agent_version=r.agent_version,
+            attempt_index=r.attempt_index,
             status=r.status,
             trace_id=str(r.trace_id) if r.trace_id else None,
             error_message=r.error_message,
@@ -101,6 +103,7 @@ async def get_run(run_id: str, db: AsyncSession = Depends(get_db)):
         task_id=str(run.task_id),
         eval_case_id=str(run.eval_case_id),
         agent_version=run.agent_version,
+        attempt_index=run.attempt_index,
         status=run.status,
         trace_id=str(run.trace_id) if run.trace_id else None,
         error_message=run.error_message,

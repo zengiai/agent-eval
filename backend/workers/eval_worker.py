@@ -19,6 +19,7 @@ from backend.core.models import (
 )
 from backend.runner.engine import EvaluationOrchestrator
 from backend.core.config import settings
+from backend.case_set_results.service import recompute_case_set_result_best_effort
 
 logger = logging.getLogger(__name__)
 
@@ -126,13 +127,14 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
         # 处理 tool_call（可能有多个，取第一个匹配）
         tool_spans = [s for s in spans if s.span_type == "tool_call"]
 
+        run_uuid = eval_run.id if eval_run else (UUID(eval_run_id) if eval_run_id else None)
+
         for layer in orchestrator.enabled_layers:
             layer_result = results.get(layer)
             if layer_result is None or layer_result.error:
                 continue
 
             trace_uuid = UUID(trace_id)
-            run_uuid = UUID(eval_run_id) if eval_run_id else None
             if layer == "outcome":
                 # Outcome 层不绑定 span，但记录 trace_id
                 eval_score = EvalScore(
@@ -221,7 +223,12 @@ async def evaluate_trace(trace_id: str, eval_run_id: str = None) -> Dict[str, An
                 )
             )
 
+        task_id_for_pass_result = eval_run.task_id if eval_run else None
+
         await session.commit()
+
+        # 旁路计算评测集 pass 结果。best-effort，失败只记录日志，不影响主评分结果。
+        await recompute_case_set_result_best_effort(task_id_for_pass_result)
 
         logger.info("评测完成: trace=%s overall=%.2f layers=%s",
                      trace_id, overall, list(results.keys()))
