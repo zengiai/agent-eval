@@ -349,177 +349,491 @@ async def dashboard_trace_detail(trace_id: str):
 CHAT_HTML = r"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-<meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1.0">
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Agent Eval · Chat</title>
 <style>
-:root{--bg:#0f1117;--card:#1a1d27;--border:#2a2d3a;--text:#e1e4eb;--muted:#888ca0;
-  --accent:#6c8aff;--green:#4ade80;--red:#f87171;--purple:#a78bfa;}
-*{margin:0;padding:0;box-sizing:border-box}
-body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:var(--bg);color:var(--text);min-height:100vh;overflow:hidden}
-.topbar{display:flex;justify-content:space-between;align-items:center;padding:12px 24px;background:var(--card);border-bottom:1px solid var(--border)}
-.topbar h1{font-size:18px;display:flex;align-items:center;gap:8px}
-.topbar a{color:var(--accent);text-decoration:none;font-size:13px;padding:6px 14px;border:1px solid var(--accent);border-radius:6px;transition:.2s}
-.topbar a:hover{background:var(--accent);color:#fff}
-.btn-flush{padding:6px 14px;background:var(--green);color:#000;border:none;border-radius:6px;cursor:pointer;font-size:12px;font-weight:600;margin-right:10px}
-.btn-flush:disabled{opacity:.4}
-.mode-switch{display:flex;gap:2px;background:var(--bg);border-radius:8px;padding:3px;margin-right:12px}
-.mode-option{padding:5px 12px;border-radius:6px;font-size:12px;cursor:pointer;color:var(--muted);transition:.2s;user-select:none}
-.mode-option input{display:none}
-.mode-option.active{background:var(--accent);color:#fff;font-weight:600}
-.mode-option.disabled{opacity:.3;cursor:not-allowed}
-.chat-wrap{flex:1;overflow:hidden;display:flex;flex-direction:column;height:calc(100vh - 60px)}
-.chat-msgs{flex:1;overflow-y:auto;padding:20px 24px}
-.msg{margin-bottom:18px;animation:fadeIn .3s}
-.msg.user{text-align:right}.msg.agent{text-align:left}
-.msg .bubble{display:inline-block;max-width:80%;padding:12px 16px;border-radius:16px;line-height:1.6;white-space:pre-wrap;word-break:break-word;text-align:left}
-.msg.user .bubble{background:var(--accent);color:#fff;border-bottom-right-radius:4px}
-.msg.agent .bubble{background:var(--border);border-bottom-left-radius:4px}
-.msg .tag{font-size:10px;color:var(--muted);margin-top:4px}
-.status-tag{display:inline-block;padding:4px 10px;margin:6px 0;border-radius:6px;font-size:12px;color:var(--muted);background:rgba(136,140,160,.1);animation:fadeIn .3s}
-.tool-tag{display:inline-block;padding:4px 10px;margin:6px 0;border-radius:6px;font-size:12px;color:var(--purple);background:rgba(167,139,250,.1);animation:fadeIn .3s}
-.chat-bar{display:flex;gap:12px;padding:16px 24px;background:var(--card);border-top:1px solid var(--border)}
-.chat-bar input{flex:1;padding:14px 18px;background:var(--bg);border:1px solid var(--border);border-radius:12px;color:var(--text);font-size:15px;outline:none}
-.chat-bar input:focus{border-color:var(--accent)}
-.chat-bar button{padding:14px 28px;background:var(--accent);color:#fff;border:none;border-radius:12px;cursor:pointer;font-size:15px;font-weight:600}
-.chat-bar button:hover{opacity:.85}.chat-bar button:disabled{opacity:.4;cursor:not-allowed}
-@keyframes fadeIn{from{opacity:0;transform:translateY(6px)}to{opacity:1;transform:translateY(0)}}
-.cursor{display:inline-block;width:8px;height:18px;background:var(--accent);animation:blink .8s infinite;vertical-align:text-bottom;margin-left:2px}
-@keyframes blink{0%,100%{opacity:1}50%{opacity:0}}
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --panel-hover: #f8f9fc;
+    --panel-soft: #f9fafb;
+    --text: #1a1a2e;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --border-strong: #d1d5db;
+    --primary: #6366f1;
+    --primary-hover: #4f46e5;
+    --primary-soft: rgba(99,102,241,0.08);
+    --success: #059669;
+    --danger: #dc2626;
+    --warning: #d97706;
+    --radius: 12px;
+    --radius-sm: 8px;
+    --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ===== 滚动条 ===== */
+  ::-webkit-scrollbar { width: 6px; height: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: #d1d5db; border-radius: 3px; }
+  ::-webkit-scrollbar-thumb:hover { background: #9ca3af; }
+
+  /* ===== 问候栏 ===== */
+  .greeting-bar {
+    padding: 24px 28px 20px;
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .greeting-text h1 {
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -.3px;
+    margin: 0 0 4px;
+  }
+  .greeting-summary {
+    font-size: 13px;
+    color: var(--muted);
+    margin: 0;
+    line-height: 1.5;
+  }
+  .greeting-meta {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-shrink: 0;
+    flex-wrap: wrap;
+  }
+  .version-badge {
+    padding: 4px 10px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--primary-soft);
+    color: var(--primary);
+    border: 1px solid rgba(129,140,248,0.15);
+    white-space: nowrap;
+  }
+
+  /* ===== 按钮 ===== */
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 14px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+    background: transparent;
+    color: var(--muted);
+    text-decoration: none;
+    font-family: inherit;
+  }
+  .btn:hover { border-color: var(--border-strong); color: var(--text); background: var(--panel-hover); }
+  .btn-primary {
+    border-color: rgba(99,102,241,0.2);
+    background: rgba(99,102,241,0.1);
+    color: #4f46e5;
+  }
+  .btn-primary:hover {
+    background: rgba(99,102,241,0.16);
+    border-color: rgba(99,102,241,0.35);
+    color: #4f46e5;
+  }
+  .btn-success {
+    border-color: rgba(5,150,105,0.2);
+    background: rgba(5,150,105,0.1);
+    color: #047857;
+  }
+  .btn-success:hover {
+    background: rgba(5,150,105,0.16);
+    border-color: rgba(5,150,105,0.35);
+  }
+  .btn:disabled { opacity: .45; pointer-events: none; cursor: not-allowed; }
+
+  /* ===== 模式切换（nav-pill 风格） ===== */
+  .mode-switch {
+    display: flex;
+    gap: 2px;
+    padding: 3px;
+    border-radius: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+  }
+  .mode-option {
+    padding: 5px 14px;
+    border: none;
+    background: none;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 6px;
+    transition: all .15s;
+    user-select: none;
+    white-space: nowrap;
+  }
+  .mode-option:hover { color: var(--text); }
+  .mode-option.active { background: var(--primary-soft); color: var(--primary); }
+  .mode-option.disabled { opacity: .3; cursor: not-allowed; }
+  .mode-option input { display: none; }
+
+  /* ===== 布局 ===== */
+  .container {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 0 28px 24px;
+  }
+  .chat-panel {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    display: flex;
+    flex-direction: column;
+    height: calc(100vh - 170px);
+    overflow: hidden;
+  }
+  .chat-msgs {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px 24px;
+    min-height: 0;
+  }
+  .empty-state {
+    height: 100%;
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+    font-size: 14px;
+  }
+  .msg {
+    display: flex;
+    margin: 0 0 14px;
+    animation: fadeIn .3s;
+  }
+  .msg.user { justify-content: flex-end; }
+  .bubble {
+    max-width: min(700px, 82%);
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    border: 1px solid var(--border);
+    line-height: 1.6;
+    font-size: 14px;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .msg.user .bubble { background: #eef2ff; border-color: #c7d2fe; }
+  .msg.agent .bubble { background: var(--panel-soft); }
+  .status-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    margin: 6px 0;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--muted);
+    background: var(--panel-soft);
+    border: 1px solid var(--border);
+    animation: fadeIn .3s;
+  }
+  .tool-tag {
+    display: inline-block;
+    padding: 4px 10px;
+    margin: 6px 0;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 500;
+    color: #6d28d9;
+    background: #f5f3ff;
+    border: 1px solid #ede9fe;
+    animation: fadeIn .3s;
+  }
+  .tag {
+    font-size: 10px;
+    color: var(--muted);
+    margin-top: 4px;
+  }
+
+  /* ===== 输入栏 ===== */
+  .composer {
+    padding: 14px 20px;
+    display: flex;
+    gap: 10px;
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    border-radius: 0 0 var(--radius) var(--radius);
+  }
+  .composer input {
+    flex: 1;
+    padding: 10px 14px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    outline: none;
+    font: inherit;
+    font-size: 14px;
+    color: var(--text);
+    background: #fff;
+    transition: border-color .15s;
+  }
+  .composer input::placeholder { color: var(--muted); opacity: .5; }
+  .composer input:focus { border-color: var(--primary); box-shadow: 0 0 0 3px var(--primary-soft); }
+  .composer button {
+    padding: 10px 24px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all .15s;
+    white-space: nowrap;
+    background: rgba(99,102,241,0.1);
+    color: #4f46e5;
+    border-color: rgba(99,102,241,0.2);
+    font-family: inherit;
+  }
+  .composer button:hover { background: rgba(99,102,241,0.16); border-color: rgba(99,102,241,0.35); }
+  .composer button:disabled { opacity: .45; cursor: not-allowed; }
+
+  /* ===== Toast ===== */
+  .toast {
+    position: fixed;
+    top: 24px;
+    right: 24px;
+    padding: 12px 22px;
+    border-radius: var(--radius-sm);
+    font-size: 13px;
+    font-weight: 600;
+    color: #fff;
+    z-index: 2000;
+    transform: translateX(120%);
+    transition: transform .3s cubic-bezier(.4,0,.2,1);
+  }
+  .toast.show { transform: translateX(0); }
+  .toast-success { background: var(--success); }
+  .toast-error { background: var(--danger); }
+
+  @keyframes fadeIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+  .cursor {
+    display: inline-block;
+    width: 8px;
+    height: 18px;
+    background: var(--primary);
+    animation: blink .8s infinite;
+    vertical-align: text-bottom;
+    margin-left: 2px;
+  }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: 0; } }
+
+  @media (max-width: 640px) {
+    .container { padding: 0 14px 16px; }
+    .greeting-bar { padding: 16px 14px 12px; flex-direction: column; }
+    .chat-panel { height: calc(100vh - 210px); }
+    .composer { flex-direction: column; }
+    .bubble { max-width: 92%; }
+  }
 </style>
 </head>
 <body>
 
-<div class="topbar">
-  <h1>💬 Agent Eval · Chat</h1>
-  <div style="display:flex;align-items:center;">
+<!-- ===== 问候栏 ===== -->
+<header class="greeting-bar">
+  <div class="greeting-text">
+    <h1 id="greeting-title">下午好</h1>
+    <p class="greeting-summary">Agent Eval · Chat —— 支持工具调用与流式输出的对话测试页</p>
+  </div>
+  <div class="greeting-meta">
+    <span class="version-badge">Example v1.0</span>
     <div class="mode-switch">
       <label class="mode-option active" id="modeSdk" onclick="switchMode('sdk')">
-        <input type="radio" name="traceMode" value="sdk" checked> SDK 埋点
+        <input type="radio" name="traceMode" value="sdk" checked> SDK
       </label>
       <label class="mode-option" id="modeOtel" onclick="switchMode('otel')">
-        <input type="radio" name="traceMode" value="otel"> OTel 埋点
+        <input type="radio" name="traceMode" value="otel"> OTel
       </label>
     </div>
-    <button class="btn-flush" onclick="flushEvents()">📥 Flush</button>
-    <a href="http://localhost:18000/dashboard/" target="_blank">📊 查看看板 →</a>
+    <button class="btn btn-success" onclick="flushEvents()" id="btn-flush">Flush</button>
+    <a class="btn" href="http://localhost:18000/dashboard/" target="_blank">Dashboard</a>
+  </div>
+</header>
+
+<div class="container">
+  <div class="chat-panel">
+    <div class="chat-msgs" id="chatMsgs">
+      <div class="msg agent"><div class="bubble">你好！我是支持工具调用与流式输出的 ExampleAgent，输入问题开始对话。</div></div>
+    </div>
+    <div class="composer">
+      <input id="chatInput" placeholder="输入问题..." onkeydown="if(event.key==='Enter')send()">
+      <button id="sendBtn" onclick="send()">发送</button>
+    </div>
   </div>
 </div>
 
-<div class="chat-wrap">
-  <div class="chat-msgs" id="chatMsgs">
-    <div class="msg agent"><div class="bubble">👋 你好！我是支持工具调用 + 流式输出的 ExampleAgent。</div></div>
-  </div>
-  <div class="chat-bar">
-    <input id="chatInput" placeholder="输入问题..." onkeydown="if(event.key==='Enter')send()">
-    <button id="sendBtn" onclick="send()">发送</button>
-  </div>
-</div>
+<div class="toast" id="toast"></div>
 
 <script>
-let currentBubble=null;
-let currentTraceMode='sdk';
+let currentBubble = null;
+let currentTraceMode = 'sdk';
 
-function switchMode(mode){
-  currentTraceMode=mode;
-  document.getElementById('modeSdk').classList.toggle('active',mode==='sdk');
-  document.getElementById('modeOtel').classList.toggle('active',mode==='otel');
+// ---- 时间感知问候语 ----
+(function() {
+  var h = new Date().getHours();
+  var g = h < 6 ? '夜深了' : h < 12 ? '早上好' : h < 18 ? '下午好' : '晚上好';
+  var el = document.getElementById('greeting-title');
+  if (el) el.textContent = g;
+})();
+
+function showToast(msg, type) {
+  type = type || 'success';
+  var t = document.getElementById('toast');
+  t.textContent = msg;
+  t.className = 'toast toast-' + type + ' show';
+  setTimeout(function() { t.classList.remove('show'); }, 2500);
 }
 
-async function send(){
-  const input=document.getElementById('chatInput');
-  const q=input.value.trim(); if(!q)return;
-  const btn=document.getElementById('sendBtn');
-  btn.disabled=true;btn.textContent='...';
-  appendMsg('user',q);
-  input.value='';
+function switchMode(mode) {
+  currentTraceMode = mode;
+  document.getElementById('modeSdk').classList.toggle('active', mode === 'sdk');
+  document.getElementById('modeOtel').classList.toggle('active', mode === 'otel');
+}
 
-  const bubble=createMsgBubble('agent');
-  currentBubble=bubble;
-  let fullText='';
+async function send() {
+  var input = document.getElementById('chatInput');
+  var q = input.value.trim();
+  if (!q) return;
+  var btn = document.getElementById('sendBtn');
+  btn.disabled = true;
+  btn.textContent = '发送中';
+  appendMsg('user', q);
+  input.value = '';
 
-  try{
-    const resp=await fetch('/api/chat/stream',{method:'POST',
-      headers:{'Content-Type':'application/json'},body:JSON.stringify({query:q,trace_mode:currentTraceMode})});
-    const reader=resp.body.getReader();
-    const dec=new TextDecoder();
-    let buf='';
+  var bubble = createMsgBubble('agent');
+  currentBubble = bubble;
+  var fullText = '';
 
-    while(true){
-      const{value,done}=await reader.read();
-      if(done)break;
-      buf+=dec.decode(value,{stream:true});
-      const lines=buf.split('\n');
-      buf=lines.pop()||'';
+  try {
+    var resp = await fetch('/api/chat/stream', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ query: q, trace_mode: currentTraceMode })
+    });
+    var reader = resp.body.getReader();
+    var dec = new TextDecoder();
+    var buf = '';
 
-      for(const line of lines){
-        if(!line.startsWith('data: '))continue;
-        const payload=line.slice(6);
-        if(payload==='[DONE]'){removeCursor();break;}
-        try{
-          const msg=JSON.parse(payload);
-          if(msg.type==='token'){
-            fullText+=msg.text;
-            bubble.textContent=fullText;
+    while (true) {
+      var _a = await reader.read(), value = _a.value, done = _a.done;
+      if (done) break;
+      buf += dec.decode(value, { stream: true });
+      var lines = buf.split('\n');
+      buf = lines.pop() || '';
+
+      for (var _i = 0, lines_1 = lines; _i < lines_1.length; _i++) {
+        var line = lines_1[_i];
+        if (!line.startsWith('data: ')) continue;
+        var payload = line.slice(6);
+        if (payload === '[DONE]') { removeCursor(); break; }
+        try {
+          var msg = JSON.parse(payload);
+          if (msg.type === 'token') {
+            fullText += msg.text;
+            bubble.textContent = fullText;
             addCursor(bubble);
-          }else if(msg.type==='status'){
-            const el=document.createElement('div');
-            el.className='status-tag';el.textContent=msg.text;
+          } else if (msg.type === 'status') {
+            var el = document.createElement('div');
+            el.className = 'status-tag';
+            el.textContent = msg.text;
             document.getElementById('chatMsgs').appendChild(el);
-            el.scrollIntoView({behavior:'smooth'});
-          }else if(msg.type==='tool'){
-            const el=document.createElement('div');
-            el.className='tool-tag';el.textContent=msg.text;
+            el.scrollIntoView({ behavior: 'smooth' });
+          } else if (msg.type === 'tool') {
+            var el = document.createElement('div');
+            el.className = 'tool-tag';
+            el.textContent = msg.text;
             document.getElementById('chatMsgs').appendChild(el);
-            el.scrollIntoView({behavior:'smooth'});
-          }else if(msg.type==='meta'){
-            const tag=document.createElement('div');
-            tag.className='tag';tag.textContent='run: '+msg.run_id.slice(0,8)+'...';
+            el.scrollIntoView({ behavior: 'smooth' });
+          } else if (msg.type === 'meta') {
+            var tag = document.createElement('div');
+            tag.className = 'tag';
+            tag.textContent = 'run: ' + msg.run_id.slice(0, 8) + '...';
             document.getElementById('chatMsgs').appendChild(tag);
-          }else if(msg.type==='error'){
-            bubble.textContent='❌ '+msg.text;
+          } else if (msg.type === 'error') {
+            bubble.textContent = '错误: ' + msg.text;
           }
-        }catch(e){}
+        } catch (e) {}
       }
     }
-  }catch(e){
-    if(currentBubble)currentBubble.textContent='❌ 网络错误: '+e.message;
+  } catch (e) {
+    if (currentBubble) currentBubble.textContent = '网络错误: ' + e.message;
   }
   removeCursor();
-  currentBubble=null;
-  btn.disabled=false;btn.textContent='发送';
+  currentBubble = null;
+  btn.disabled = false;
+  btn.textContent = '发送';
   input.focus();
 }
 
-function createMsgBubble(role){
-  const wrap=document.createElement('div');wrap.className='msg '+role;
-  const bubble=document.createElement('div');bubble.className='bubble';
+function createMsgBubble(role) {
+  var wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble';
   wrap.appendChild(bubble);
   document.getElementById('chatMsgs').appendChild(wrap);
-  wrap.scrollIntoView({behavior:'smooth'});
+  wrap.scrollIntoView({ behavior: 'smooth' });
   return bubble;
 }
-function addCursor(el){
-  const existing=el.parentElement?.querySelector('.cursor');
-  if(existing)return;
-  const c=document.createElement('span');c.className='cursor';
-  el.parentElement?.appendChild(c);
+
+function addCursor(el) {
+  var existing = el.parentElement && el.parentElement.querySelector('.cursor');
+  if (existing) return;
+  var c = document.createElement('span');
+  c.className = 'cursor';
+  el.parentElement.appendChild(c);
 }
-function removeCursor(){
-  document.querySelectorAll('.cursor').forEach(c=>c.remove());
+
+function removeCursor() {
+  var cursors = document.querySelectorAll('.cursor');
+  for (var _i = 0, _a = cursors; _i < _a.length; _i++) { _a[_i].remove(); }
 }
-function appendMsg(role,text){
-  const wrap=document.createElement('div');wrap.className='msg '+role;
-  const bubble=document.createElement('div');bubble.className='bubble';bubble.textContent=text;
+
+function appendMsg(role, text) {
+  var wrap = document.createElement('div');
+  wrap.className = 'msg ' + role;
+  var bubble = document.createElement('div');
+  bubble.className = 'bubble';
+  bubble.textContent = text;
   wrap.appendChild(bubble);
   document.getElementById('chatMsgs').appendChild(wrap);
-  wrap.scrollIntoView({behavior:'smooth'});
+  wrap.scrollIntoView({ behavior: 'smooth' });
 }
-async function flushEvents(){
-  const btn=document.querySelector('.btn-flush');btn.disabled=true;btn.textContent='⏳...';
-  try{const r=await fetch('/api/flush',{method:'POST'});const d=await r.json();
-    alert('Flush: '+d.batches+' 批, 剩余 '+d.remaining);}
-  catch(e){alert('失败: '+e.message);}
-  btn.disabled=false;btn.textContent='📥 Flush';
+
+async function flushEvents() {
+  var btn = document.getElementById('btn-flush');
+  btn.disabled = true;
+  btn.textContent = 'Flushing...';
+  try {
+    var r = await fetch('/api/flush', { method: 'POST' });
+    var d = await r.json();
+    showToast('Flush 完成: ' + d.batches + ' 批次, 剩余 ' + d.remaining + ' 条', 'success');
+  } catch (e) {
+    showToast('Flush 失败: ' + e.message, 'error');
+  }
+  btn.disabled = false;
+  btn.textContent = 'Flush';
 }
 </script>
 </body>
@@ -534,8 +848,8 @@ async def index():
 # ═══════════════════════════════════════════════════════════════════════════
 if __name__ == "__main__":
     print("=" * 55)
-    print("  🚀 Agent Eval v2 · 流式对话 + Dashboard")
-    print(f"  📡 http://localhost:8800")
-    print(f"  🔧 {LLM_CONFIG['model']}")
+    print("  Agent Eval v2 · Chat + Dashboard")
+    print(f"  http://localhost:8800")
+    print(f"  Model: {LLM_CONFIG['model']}")
     print("=" * 55)
     uvicorn.run(app, host="0.0.0.0", port=8800, log_level="info", access_log=False)
