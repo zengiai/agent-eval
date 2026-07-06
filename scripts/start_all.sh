@@ -170,6 +170,13 @@ start_all() {
     log "2/7 配置环境变量..."
     load_env_file
 
+    # 检查密钥配置
+    if [ -z "$DASHSCOPE_API_KEY" ] && [ -z "$LLM_API_KEY" ]; then
+        fail "未配置 LLM API Key！请在 backend/.env 中设置 DASHSCOPE_API_KEY 或 LLM_API_KEY"
+        exit 1
+    fi
+    ok "LLM API Key 已配置"
+
     # 优先使用已有的 DATABASE_URL，否则根据 docker-compose 设置默认值
     if [ -z "$DATABASE_URL" ]; then
         export DATABASE_URL="postgresql+asyncpg://aura:aura@localhost:${DB_PORT}/agent_eval"

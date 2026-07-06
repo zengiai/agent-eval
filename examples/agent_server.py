@@ -40,14 +40,17 @@ from backend.core.models import Trace, Span, EvalScore, EvalCase
 # Config
 # ═══════════════════════════════════════════════════════════════════════════
 
+_api_key = os.environ.get("DASHSCOPE_API_KEY") or os.environ.get("LLM_API_KEY")
+if not _api_key:
+    raise RuntimeError(
+        "未配置 LLM API Key！请在 backend/.env 中设置 DASHSCOPE_API_KEY 或 LLM_API_KEY"
+    )
+
 LLM_CONFIG = {
     "model": "qwen3.7-max",
     "fast_model": "qwen3.6-flash",
     "base_url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1",
-    "api_key": os.environ.get(
-        "DASHSCOPE_API_KEY",
-        "sk-ws-H.HYXRDH.Pfz9.MEMCHxknGBxxfv-ymjc6Y-QPJuZhiNz9hioGE2Cq5qAZsAoCIHXpJPDBB7PqdQSAbbbGVD3iCQRfgqcalASLdpF0_E4N",
-    ),
+    "api_key": _api_key,
 }
 REDIS_URL = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
